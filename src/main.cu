@@ -4,7 +4,7 @@
 #include "common.h"
 #include "benchmark.h"
 #include "utils.h"
-#include "kernels/cpu_matmul.h"
+#include "kernels/cublas_matmul.h"
 #include "kernels/naive_kernel.h"
 // Add more kernels here as you implement them:
 // #include "kernels/tiled_kernel.h"
@@ -15,6 +15,9 @@ int main() {
     // A: 2048 × 1024, B: 1024 × 1536, C: 2048 × 1536
     // On purpose divisible by 32.
     MatrixDims dims = {2048, 1536, 1024};
+    
+    // Initialize cuBLAS
+    cublas_init();
     
     std::cout << "╔══════════════════════════════════════════════════════════════╗\n";
     std::cout << "║                   GPU MATMUL BENCHMARK                       ║\n";
@@ -81,27 +84,31 @@ int main() {
     // print_benchmark_result(tiled_result);
 
     // ========================================================================
-    // Benchmark CPU (baseline)
+    // Benchmark cuBLAS (optimized baseline)
     // ========================================================================
     
-    BenchmarkResult cpu_result = benchmark_cpu(h_a, h_b, h_c_expected, dims);
-    print_benchmark_result(cpu_result);
+    // Store cuBLAS result in h_c_expected for verification
+    BenchmarkResult cublas_result = benchmark_cublas(d_a, d_b, d_c, dims);
+    cudaMemcpy(h_c_expected, d_c, sizeof(float) * dims.M * dims.N, cudaMemcpyDeviceToHost);
+    print_benchmark_result(cublas_result);
 
     // ========================================================================
     // Compare Results
     // ========================================================================
     
-    compare_kernels(gpu_results, cpu_result);
+    compare_kernels(gpu_results, cublas_result);
 
     // ========================================================================
     // Verify Correctness
     // ========================================================================
     
-    verify_results(h_c, h_c_expected, dims.M * dims.N);
+    verify_results(h_c, h_c_expected, dims.M * dims.N, "cuBLAS");
 
     // ========================================================================
     // Cleanup
     // ========================================================================
+    
+    cublas_destroy();
     
     free(h_a);
     free(h_b);

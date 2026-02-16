@@ -19,8 +19,7 @@ __global__ void naive_kernel_matmul(float *a, float *b, float *c, int M, int N, 
 
         for (int i = 0; i < K; i++) {
           // 2 global memory accesses.
-          // a[row * K + i] might be coalesced since they reside in contiguous
-          // places in the memory.
+          // b[i * N + col] memory accesses across the threads in the warp are coalesced.
           sum += a[row * K + i] * b[i * N + col];
         }
 

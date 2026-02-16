@@ -28,24 +28,26 @@ void initialize_matrices(float *h_a, float *h_b, const MatrixDims &dims) {
 // Verification
 // ============================================================================
 
-bool verify_results(float *gpu_result, float *cpu_result, int size, float tolerance) {
+bool verify_results(float *gpu_result, float *reference_result, int size, 
+                    const char* reference_name, float tolerance) {
     float max_error = 0.0f;
     bool passed = true;
     
     for (int i = 0; i < size; ++i) {
-        float error = std::abs(gpu_result[i] - cpu_result[i]);
+        float error = std::abs(gpu_result[i] - reference_result[i]);
         max_error = std::max(max_error, error);
         if (error > tolerance) {
             std::cout << "❌ Verification FAILED!\n";
-            std::cout << "Mismatch at index " << i << ": GPU=" << gpu_result[i] 
-                      << " CPU=" << cpu_result[i] << " error=" << error << "\n";
+            std::cout << "Mismatch at index " << i << ": kernel=" << gpu_result[i] 
+                      << " " << reference_name << "=" << reference_result[i] 
+                      << " error=" << error << "\n";
             passed = false;
             break;
         }
     }
     
     if (passed) {
-        std::cout << "✅ Verification PASSED! Max error: " << max_error << "\n\n";
+        std::cout << "✅ Verification PASSED (vs " << reference_name << ")! Max error: " << max_error << "\n\n";
     }
     
     return passed;

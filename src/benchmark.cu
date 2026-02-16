@@ -50,7 +50,11 @@ BenchmarkResult benchmark_gpu_kernel(
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
-    return {kernel_name, total_time / num_runs, min_time, max_time, num_runs};
+    double avg_ms = total_time / num_runs;
+    double flops = 2.0 * dims.M * dims.N * dims.K;
+    double gflops = flops / (avg_ms * 1e6);
+
+    return {kernel_name, avg_ms, min_time, max_time, num_runs, gflops};
 }
 
 // ============================================================================
@@ -62,23 +66,25 @@ void print_benchmark_result(const BenchmarkResult &result) {
     std::cout << "Average time: " << result.avg_time << " ms\n";
     std::cout << "Min time:     " << result.min_time << " ms\n";
     std::cout << "Max time:     " << result.max_time << " ms\n";
+    std::cout << "GFLOPS:       " << result.gflops << "\n";
 }
 
-void compare_kernels(const std::vector<BenchmarkResult> &results, const BenchmarkResult &cpu_result) {
+void compare_kernels(const std::vector<BenchmarkResult> &results, const BenchmarkResult &baseline_result) {
     std::cout << "\n";
     std::cout << "╔══════════════════════════════════════════════════════════════╗\n";
     std::cout << "║               PERFORMANCE COMPARISON                         ║\n";
     std::cout << "╠══════════════════════════════════════════════════════════════╣\n";
-    std::cout << "║ CPU (" << cpu_result.kernel_name << "): " << cpu_result.avg_time << " ms (baseline)\n";
+    std::cout << "║ " << baseline_result.kernel_name << ": " << baseline_result.avg_time << " ms | " << baseline_result.gflops << " GFLOPS (baseline)\n";
     std::cout << "╠══════════════════════════════════════════════════════════════╣\n";
     
     for (size_t i = 0; i < results.size(); ++i) {
         const auto &result = results[i];
-        float speedup_vs_cpu = cpu_result.avg_time / result.avg_time;
+        float ratio_vs_baseline = result.avg_time / baseline_result.avg_time;
         
         std::cout << "║ " << result.kernel_name << ":\n";
         std::cout << "║   Time:    " << result.avg_time << " ms\n";
-        std::cout << "║   Speedup: " << speedup_vs_cpu << "x vs CPU\n";
+        std::cout << "║   GFLOPS:  " << result.gflops << "\n";
+        std::cout << "║   Ratio:   " << ratio_vs_baseline << "x vs " << baseline_result.kernel_name << "\n";
         
         // Compare against first kernel (naive) if this isn't the first kernel
         if (i > 0) {

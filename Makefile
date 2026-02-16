@@ -13,8 +13,11 @@ KERNEL_DIR = $(SRC_DIR)/kernels
 MAIN_SRC = $(SRC_DIR)/main.cu
 SOURCES = $(SRC_DIR)/benchmark.cu \
           $(SRC_DIR)/utils.cu \
-          $(KERNEL_DIR)/cpu_matmul.cu \
+          $(KERNEL_DIR)/cublas_matmul.cu \
           $(KERNEL_DIR)/naive_kernel.cu
+
+# Libraries
+LIBS = -lcublas
 
 # All sources combined
 ALL_SOURCES = $(MAIN_SRC) $(SOURCES)
@@ -25,13 +28,13 @@ INCLUDES = -I./$(SRC_DIR)
 .PHONY: check
 check:
 	@docker run --rm -v $$(pwd):/workspace $(CUDA_IMAGE) \
-		nvcc $(INCLUDES) $(addprefix /workspace/,$(ALL_SOURCES)) -o /dev/null 2>&1 \
+		nvcc $(INCLUDES) $(addprefix /workspace/,$(ALL_SOURCES)) $(LIBS) -o /dev/null 2>&1 \
 		| grep -E "error|warning" || echo "✓ No compilation errors found"
 
 .PHONY: build
 build:
 	@docker run --rm -v $$(pwd):/workspace $(CUDA_IMAGE) \
-		nvcc $(INCLUDES) $(addprefix /workspace/,$(ALL_SOURCES)) \
+		nvcc $(INCLUDES) $(addprefix /workspace/,$(ALL_SOURCES)) $(LIBS) \
 		-o /workspace/$(TARGET) 2>&1 \
 		| grep -E "error|warning" || echo "✓ Build successful"
 
@@ -50,7 +53,7 @@ list-sources:
 
 .PHONY: build-native
 build-native:
-	nvcc $(INCLUDES) $(ALL_SOURCES) -o $(TARGET)
+	nvcc $(INCLUDES) $(ALL_SOURCES) $(LIBS) -o $(TARGET)
 	@echo "✓ Build successful"
 
 .PHONY: run

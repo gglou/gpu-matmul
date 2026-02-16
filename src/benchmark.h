@@ -23,6 +23,6 @@ BenchmarkResult benchmark_gpu_kernel(
 // ============================================================================
 
 void print_benchmark_result(const BenchmarkResult &result);
-void compare_kernels(const std::vector<BenchmarkResult> &results, const BenchmarkResult &cpu_result);
+void compare_kernels(const std::vector<BenchmarkResult> &results, const BenchmarkResult &baseline_result);
 
 #endif // BENCHMARK_H

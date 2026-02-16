@@ -11,6 +11,7 @@ struct BenchmarkResult {
     double min_time;
     double max_time;
     int num_runs;
+    double gflops;
 };
 
 struct MatrixDims {
