@@ -3,6 +3,26 @@
 #include <numeric>
 #include <random>
 #include <cmath>
+#include <chrono>
+
+// ============================================================================
+// Data Structures
+// ============================================================================
+
+struct BenchmarkResult {
+    double avg_time;
+    double min_time;
+    double max_time;
+    int num_runs;
+};
+
+struct MatrixDims {
+    int M, N, K;  // M x K * K x N = M x N
+};
+
+// ============================================================================
+// Matrix Multiplication Kernels
+// ============================================================================
 
 // CPU matrix multiplication for verification
 // C = A * B where A is M x K, B is K x N, C is M x N
@@ -48,78 +68,58 @@ __global__ void naive_kernel_matmul(float *a, float *b, float *c, int M, int N, 
     }
 }
 
-int main() {
-    // Matrix dimensions, are M x K and K x N.
-    const int N = 900;
-    const int M = 1000;
-    const int K = 800;
+// ============================================================================
+// Initialization and Memory Management
+// ============================================================================
 
-    // Allocate host memory
-    float *h_a = (float*)malloc(sizeof(float) * M * K);
-    float *h_b = (float*)malloc(sizeof(float) * N * K);
-    float *h_c = (float*)malloc(sizeof(float) * M * N);
-    float *h_c_expected = (float*)malloc(sizeof(float) * M * N);
-
-    // Initialize host input data
-    // Random number generator with uniform distribution [0, 1]
+void initialize_matrices(float *h_a, float *h_b, const MatrixDims &dims) {
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis(0.0f, 1.0f);
     
     // Initialize matrix A (M x K)
-    for (int i = 0; i < M * K; ++i) {
+    for (int i = 0; i < dims.M * dims.K; ++i) {
         h_a[i] = dis(gen);
     }
     
     // Initialize matrix B (K x N)
-    for (int i = 0; i < K * N; ++i) {
+    for (int i = 0; i < dims.K * dims.N; ++i) {
         h_b[i] = dis(gen);
     }
+}
 
-    // Allocate device memory
-    float *d_a, *d_b, *d_c;
-    cudaMalloc((void**)&d_a, sizeof(float) * M * K);  // Matrix A: M x K
-    cudaMalloc((void**)&d_b, sizeof(float) * K * N);  // Matrix B: K x N
-    cudaMalloc((void**)&d_c, sizeof(float) * M * N);  // Matrix C: M x N
+// ============================================================================
+// Benchmarking Functions
+// ============================================================================
 
-    // Copy data from host to device
-    cudaMemcpy(d_a, h_a, sizeof(float) * M * K, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b, h_b, sizeof(float) * K * N, cudaMemcpyHostToDevice);
-
-    // Configure kernel launch
-    dim3 threadsPerBlock(16, 16);  // 16x16 = 256 threads per block
-    dim3 blocksPerGrid((N + threadsPerBlock.x - 1) / threadsPerBlock.x,
-                       (M + threadsPerBlock.y - 1) / threadsPerBlock.y);
+BenchmarkResult benchmark_gpu(float *d_a, float *d_b, float *d_c, 
+                               const MatrixDims &dims, int num_runs = 100) {
+    dim3 threadsPerBlock(16, 16);
+    dim3 blocksPerGrid((dims.N + threadsPerBlock.x - 1) / threadsPerBlock.x,
+                       (dims.M + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
     // Create CUDA events for timing
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    // Warm-up run (first run is often slower due to GPU initialization)
-    naive_kernel_matmul<<<blocksPerGrid, threadsPerBlock>>>(d_a, d_b, d_c, M, N, K);
+    // Warm-up run
+    naive_kernel_matmul<<<blocksPerGrid, threadsPerBlock>>>(d_a, d_b, d_c, dims.M, dims.N, dims.K);
     cudaDeviceSynchronize();
 
-    // Benchmark the kernel with multiple runs
-    const int num_runs = 100;
+    // Benchmark runs
     float total_time = 0.0f;
     float min_time = 1e9f;
     float max_time = 0.0f;
 
-    std::cout << "Benchmarking kernel over " << num_runs << " runs...\n";
+    std::cout << "Benchmarking GPU kernel over " << num_runs << " runs...\n";
 
     for (int run = 0; run < num_runs; ++run) {
-        // Start timing
         cudaEventRecord(start);
-        
-        // Launch the kernel
-        naive_kernel_matmul<<<blocksPerGrid, threadsPerBlock>>>(d_a, d_b, d_c, M, N, K);
-        
-        // Stop timing
+        naive_kernel_matmul<<<blocksPerGrid, threadsPerBlock>>>(d_a, d_b, d_c, dims.M, dims.N, dims.K);
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         
-        // Calculate elapsed time
         float milliseconds = 0;
         cudaEventElapsedTime(&milliseconds, start, stop);
         
@@ -128,39 +128,130 @@ int main() {
         max_time = std::max(max_time, milliseconds);
     }
 
-    float avg_time = total_time / num_runs;
-
-    std::cout << "\n=== Benchmark Results ===\n";
-    std::cout << "Average time: " << avg_time << " ms\n";
-    std::cout << "Min time:     " << min_time << " ms\n";
-    std::cout << "Max time:     " << max_time << " ms\n";
-    std::cout << "=========================\n\n";
-
-    // Destroy events
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
-    // Copy results from device to host
-    cudaMemcpy(h_c, d_c, sizeof(float) * M * N, cudaMemcpyDeviceToHost);
+    return {total_time / num_runs, min_time, max_time, num_runs};
+}
 
-    // Compute CPU reference result
-    cpu_matmul(h_a, h_b, h_c_expected, M, N, K);
-
-    // Verify results
-    float max_error = 0.0f;
-    const float tolerance = 1e-3f;  // Allow small floating point differences
+BenchmarkResult benchmark_cpu(float *h_a, float *h_b, float *h_c, 
+                               const MatrixDims &dims, int num_runs = 10) {
+    // Warm-up run
+    cpu_matmul(h_a, h_b, h_c, dims.M, dims.N, dims.K);
     
-    for (int i = 0; i < M * N; ++i) {
-        float error = std::abs(h_c[i] - h_c_expected[i]);
+    // Benchmark runs
+    double total_time = 0.0;
+    double min_time = 1e9;
+    double max_time = 0.0;
+    
+    std::cout << "Benchmarking CPU implementation over " << num_runs << " runs...\n";
+    
+    for (int run = 0; run < num_runs; ++run) {
+        auto cpu_start = std::chrono::high_resolution_clock::now();
+        cpu_matmul(h_a, h_b, h_c, dims.M, dims.N, dims.K);
+        auto cpu_end = std::chrono::high_resolution_clock::now();
+        
+        double milliseconds = std::chrono::duration<double, std::milli>(cpu_end - cpu_start).count();
+        total_time += milliseconds;
+        min_time = std::min(min_time, milliseconds);
+        max_time = std::max(max_time, milliseconds);
+    }
+    
+    return {total_time / num_runs, min_time, max_time, num_runs};
+}
+
+void print_benchmark_results(const BenchmarkResult &gpu_result, const BenchmarkResult &cpu_result) {
+    std::cout << "\n=== GPU Benchmark Results ===\n";
+    std::cout << "Average time: " << gpu_result.avg_time << " ms\n";
+    std::cout << "Min time:     " << gpu_result.min_time << " ms\n";
+    std::cout << "Max time:     " << gpu_result.max_time << " ms\n";
+    std::cout << "=============================\n\n";
+    
+    std::cout << "=== CPU Benchmark Results ===\n";
+    std::cout << "Average time: " << cpu_result.avg_time << " ms\n";
+    std::cout << "Min time:     " << cpu_result.min_time << " ms\n";
+    std::cout << "Max time:     " << cpu_result.max_time << " ms\n";
+    std::cout << "=============================\n\n";
+    
+    float speedup = cpu_result.avg_time / gpu_result.avg_time;
+    std::cout << "=== Performance Comparison ===\n";
+    std::cout << "GPU Average: " << gpu_result.avg_time << " ms\n";
+    std::cout << "CPU Average: " << cpu_result.avg_time << " ms\n";
+    std::cout << "Speedup:     " << speedup << "x\n";
+    std::cout << "==============================\n\n";
+}
+
+// ============================================================================
+// Verification
+// ============================================================================
+
+bool verify_results(float *gpu_result, float *cpu_result, int size, float tolerance = 1e-3f) {
+    float max_error = 0.0f;
+    bool passed = true;
+    
+    for (int i = 0; i < size; ++i) {
+        float error = std::abs(gpu_result[i] - cpu_result[i]);
         max_error = std::max(max_error, error);
         if (error > tolerance) {
-            std::cout << "Mismatch at index " << i << ": GPU=" << h_c[i] 
-                      << " CPU=" << h_c_expected[i] << " error=" << error << "\n";
+            std::cout << "❌ Verification FAILED!\n";
+            std::cout << "Mismatch at index " << i << ": GPU=" << gpu_result[i] 
+                      << " CPU=" << cpu_result[i] << " error=" << error << "\n";
+            passed = false;
             break;
         }
     }
+    
+    if (passed) {
+        std::cout << "✅ Verification PASSED! Max error: " << max_error << "\n\n";
+    }
+    
+    return passed;
+}
 
-    // Free memory
+// ============================================================================
+// Main
+// ============================================================================
+
+int main() {
+    // Matrix dimensions: M x K * K x N = M x N
+    MatrixDims dims = {1000, 900, 800};
+    
+    std::cout << "Matrix multiplication: (" << dims.M << " x " << dims.K << ") * (" 
+              << dims.K << " x " << dims.N << ") = (" << dims.M << " x " << dims.N << ")\n\n";
+
+    // Allocate host memory
+    float *h_a = (float*)malloc(sizeof(float) * dims.M * dims.K);
+    float *h_b = (float*)malloc(sizeof(float) * dims.K * dims.N);
+    float *h_c = (float*)malloc(sizeof(float) * dims.M * dims.N);
+    float *h_c_expected = (float*)malloc(sizeof(float) * dims.M * dims.N);
+
+    // Initialize matrices with random values
+    initialize_matrices(h_a, h_b, dims);
+
+    // Allocate device memory
+    float *d_a, *d_b, *d_c;
+    cudaMalloc((void**)&d_a, sizeof(float) * dims.M * dims.K);
+    cudaMalloc((void**)&d_b, sizeof(float) * dims.K * dims.N);
+    cudaMalloc((void**)&d_c, sizeof(float) * dims.M * dims.N);
+
+    // Copy data from host to device
+    cudaMemcpy(d_a, h_a, sizeof(float) * dims.M * dims.K, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b, h_b, sizeof(float) * dims.K * dims.N, cudaMemcpyHostToDevice);
+
+    // Benchmark GPU
+    BenchmarkResult gpu_result = benchmark_gpu(d_a, d_b, d_c, dims);
+    cudaMemcpy(h_c, d_c, sizeof(float) * dims.M * dims.N, cudaMemcpyDeviceToHost);
+
+    // Benchmark CPU
+    BenchmarkResult cpu_result = benchmark_cpu(h_a, h_b, h_c_expected, dims);
+
+    // Print results
+    print_benchmark_results(gpu_result, cpu_result);
+
+    // Verify correctness
+    verify_results(h_c, h_c_expected, dims.M * dims.N);
+
+    // Cleanup
     free(h_a);
     free(h_b);
     free(h_c);
