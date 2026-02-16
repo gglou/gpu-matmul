@@ -14,7 +14,8 @@ MAIN_SRC = $(SRC_DIR)/main.cu
 SOURCES = $(SRC_DIR)/benchmark.cu \
           $(SRC_DIR)/utils.cu \
           $(KERNEL_DIR)/cublas_matmul.cu \
-          $(KERNEL_DIR)/naive_kernel.cu
+          $(KERNEL_DIR)/naive_kernel.cu \
+          $(KERNEL_DIR)/coalesced_kernel.cu
 
 # Libraries
 LIBS = -lcublas

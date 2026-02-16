@@ -6,6 +6,7 @@
 #include "utils.h"
 #include "kernels/cublas_matmul.h"
 #include "kernels/naive_kernel.h"
+#include "kernels/coalesced_kernel.h"
 // Add more kernels here as you implement them:
 // #include "kernels/tiled_kernel.h"
 // #include "kernels/shared_mem_kernel.h"
@@ -55,7 +56,7 @@ int main() {
     
     std::vector<BenchmarkResult> gpu_results;
     
-    // Naive kernel
+    // Naive kernel (uncoalesced memory access)
     BenchmarkResult naive_result = benchmark_gpu_kernel(
         naive_kernel_matmul, 
         "Naive Kernel", 
@@ -67,6 +68,16 @@ int main() {
 
     // Copy result for verification (using last kernel run)
     cudaMemcpy(h_c, d_c, sizeof(float) * dims.M * dims.N, cudaMemcpyDeviceToHost);
+
+    // Memory coalesced kernel
+    BenchmarkResult coalesced_result = benchmark_gpu_kernel(
+        coalesced_kernel_matmul, 
+        "Coalesced Kernel", 
+        d_a, d_b, d_c, 
+        dims
+    );
+    gpu_results.push_back(coalesced_result);
+    print_benchmark_result(coalesced_result);
 
     // ========================================================================
     // Add more kernels here as you implement them:

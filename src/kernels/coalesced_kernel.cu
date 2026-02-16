@@ -1,9 +1,9 @@
-#include "naive_kernel.h"
+#include "coalesced_kernel.h"
 
-__global__ void naive_kernel_matmul(float *a, float *b, float *c, int M, int N, int K) {
-    // x = row.
+__global__ void coalesced_kernel_matmul(float *a, float *b, float *c, int M, int N, int K) {
+    // x = column.
     int x = blockIdx.x * blockDim.x + threadIdx.x;
-    // y = column.
+    // y = row.
     int y = blockIdx.y * blockDim.y + threadIdx.y;
   
     // threadId = threadIdx.x + blockDim.x * threadIdx.y
@@ -11,17 +11,17 @@ __global__ void naive_kernel_matmul(float *a, float *b, float *c, int M, int N, 
     // Boundary check. 
     // If the block dimensions do not perfectly divide the [C] matrix
     // we will cause undefined out of bounds behaviour. (Possibly crash).
-    if (x < M && y < N) {
+    if (y < M && x < N) {
         // Sum is stored in a register.
         float sum = 0.0f;
 
         for (int i = 0; i < K; i++) {
-          sum += a[x * K + i] * b[i * N + y];
+          sum += a[y * K + i] * b[i * N + x];
         }
 
         // Set the result.
         // Store (ST) assignments are fire & forget.
         // LD (memory accesses) are more expensive.
-        c[x * N + y] = sum;
+        c[y * N + x] = sum;
     }
 }
