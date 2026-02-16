@@ -12,7 +12,9 @@
 
 int main() {
     // Matrix dimensions: M x K * K x N = M x N
-    MatrixDims dims = {1000, 900, 800};
+    // A: 2048 × 1024, B: 1024 × 1536, C: 2048 × 1536
+    // On purpose divisible by 32.
+    MatrixDims dims = {2048, 1536, 1024};
     
     std::cout << "╔══════════════════════════════════════════════════════════════╗\n";
     std::cout << "║                   GPU MATMUL BENCHMARK                       ║\n";

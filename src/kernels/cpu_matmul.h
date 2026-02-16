@@ -13,6 +13,6 @@ void cpu_matmul(float *a, float *b, float *c, int M, int N, int K);
 
 // Benchmark CPU implementation
 BenchmarkResult benchmark_cpu(float *h_a, float *h_b, float *h_c, 
-                               const MatrixDims &dims, int num_runs = 10);
+                               const MatrixDims &dims, int num_runs = 1);
 
 #endif // CPU_MATMUL_H
