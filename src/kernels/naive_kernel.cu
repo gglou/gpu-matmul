@@ -5,27 +5,27 @@
 // ============================================================================
 
 __global__ void naive_kernel_matmul(float *a, float *b, float *c, int M, int N, int K) {
-    // Row of the resulting matrix.
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    // Column of the resulting matrix.
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    // x = column.
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    // y = row.
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
 
     // Boundary check. 
     // If the block dimensions do not perfectly divide the [C] matrix
     // we will cause undefined out of bounds behaviour. (Possibly crash).
-    if (row < M && col < N) {
+    if (y < M && x < N) {
         // Sum is stored in a register.
         float sum = 0.0f;
 
         for (int i = 0; i < K; i++) {
           // 2 global memory accesses.
-          // b[i * N + col] memory accesses across the threads in the warp are coalesced.
-          sum += a[row * K + i] * b[i * N + col];
+          // b[i * N + x] memory accesses across the threads in the warp are coalesced.
+          sum += a[y * K + i] * b[i * N + x];
         }
 
         // Set the result.
         // Store (ST) assignments are fire & forget.
         // LD (memory accesses) are more expensive.
-        c[row * N + col] = sum;
+        c[y * N + x] = sum;
     }
 }
