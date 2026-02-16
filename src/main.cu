@@ -1,0 +1,113 @@
+#include <iostream>
+#include <vector>
+
+#include "common.h"
+#include "benchmark.h"
+#include "utils.h"
+#include "kernels/cpu_matmul.h"
+#include "kernels/naive_kernel.h"
+// Add more kernels here as you implement them:
+// #include "kernels/tiled_kernel.h"
+// #include "kernels/shared_mem_kernel.h"
+
+int main() {
+    // Matrix dimensions: M x K * K x N = M x N
+    MatrixDims dims = {1000, 900, 800};
+    
+    std::cout << "╔══════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║                   GPU MATMUL BENCHMARK                       ║\n";
+    std::cout << "╚══════════════════════════════════════════════════════════════╝\n\n";
+    
+    std::cout << "Matrix multiplication: (" << dims.M << " x " << dims.K << ") * (" 
+              << dims.K << " x " << dims.N << ") = (" << dims.M << " x " << dims.N << ")\n\n";
+
+    // ========================================================================
+    // Memory Allocation
+    // ========================================================================
+    
+    // Host memory
+    float *h_a = (float*)malloc(sizeof(float) * dims.M * dims.K);
+    float *h_b = (float*)malloc(sizeof(float) * dims.K * dims.N);
+    float *h_c = (float*)malloc(sizeof(float) * dims.M * dims.N);
+    float *h_c_expected = (float*)malloc(sizeof(float) * dims.M * dims.N);
+
+    // Initialize matrices with random values
+    initialize_matrices(h_a, h_b, dims);
+
+    // Device memory
+    float *d_a, *d_b, *d_c;
+    cudaMalloc((void**)&d_a, sizeof(float) * dims.M * dims.K);
+    cudaMalloc((void**)&d_b, sizeof(float) * dims.K * dims.N);
+    cudaMalloc((void**)&d_c, sizeof(float) * dims.M * dims.N);
+
+    // Copy data from host to device
+    cudaMemcpy(d_a, h_a, sizeof(float) * dims.M * dims.K, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b, h_b, sizeof(float) * dims.K * dims.N, cudaMemcpyHostToDevice);
+
+    // ========================================================================
+    // Benchmark GPU Kernels
+    // ========================================================================
+    
+    std::vector<BenchmarkResult> gpu_results;
+    
+    // Naive kernel
+    BenchmarkResult naive_result = benchmark_gpu_kernel(
+        naive_kernel_matmul, 
+        "Naive Kernel", 
+        d_a, d_b, d_c, 
+        dims
+    );
+    gpu_results.push_back(naive_result);
+    print_benchmark_result(naive_result);
+
+    // Copy result for verification (using last kernel run)
+    cudaMemcpy(h_c, d_c, sizeof(float) * dims.M * dims.N, cudaMemcpyDeviceToHost);
+
+    // ========================================================================
+    // Add more kernels here as you implement them:
+    // ========================================================================
+    
+    // Example: Tiled kernel
+    // BenchmarkResult tiled_result = benchmark_gpu_kernel(
+    //     tiled_kernel_matmul, 
+    //     "Tiled Kernel", 
+    //     d_a, d_b, d_c, 
+    //     dims,
+    //     dim3(32, 32)  // Can customize block size per kernel
+    // );
+    // gpu_results.push_back(tiled_result);
+    // print_benchmark_result(tiled_result);
+
+    // ========================================================================
+    // Benchmark CPU (baseline)
+    // ========================================================================
+    
+    BenchmarkResult cpu_result = benchmark_cpu(h_a, h_b, h_c_expected, dims);
+    print_benchmark_result(cpu_result);
+
+    // ========================================================================
+    // Compare Results
+    // ========================================================================
+    
+    compare_kernels(gpu_results, cpu_result);
+
+    // ========================================================================
+    // Verify Correctness
+    // ========================================================================
+    
+    verify_results(h_c, h_c_expected, dims.M * dims.N);
+
+    // ========================================================================
+    // Cleanup
+    // ========================================================================
+    
+    free(h_a);
+    free(h_b);
+    free(h_c);
+    free(h_c_expected);
+    cudaFree(d_a);
+    cudaFree(d_b);
+    cudaFree(d_c);
+
+    return 0;
+}

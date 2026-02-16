@@ -1,23 +1,60 @@
-# Makefile for CUDA compilation checking on macOS via Docker
+# Makefile for CUDA compilation
+# - Docker targets (check, build): for macOS or systems without native CUDA
+# - Native targets (build-native, run): for systems with CUDA installed (e.g., Colab)
 
 CUDA_IMAGE = nvidia/cuda:12.0.0-devel-ubuntu22.04
-SOURCE = matrix_mul.cu
 TARGET = matrix_mul
+
+# Source directories
+SRC_DIR = src
+KERNEL_DIR = $(SRC_DIR)/kernels
+
+# Source files
+MAIN_SRC = $(SRC_DIR)/main.cu
+SOURCES = $(SRC_DIR)/benchmark.cu \
+          $(SRC_DIR)/utils.cu \
+          $(KERNEL_DIR)/cpu_matmul.cu \
+          $(KERNEL_DIR)/naive_kernel.cu
+
+# All sources combined
+ALL_SOURCES = $(MAIN_SRC) $(SOURCES)
+
+# Include directories
+INCLUDES = -I./$(SRC_DIR)
 
 .PHONY: check
 check:
 	@docker run --rm -v $$(pwd):/workspace $(CUDA_IMAGE) \
-		nvcc -c /workspace/$(SOURCE) -o /dev/null 2>&1 \
+		nvcc $(INCLUDES) $(addprefix /workspace/,$(ALL_SOURCES)) -o /dev/null 2>&1 \
 		| grep -E "error|warning" || echo "✓ No compilation errors found"
 
 .PHONY: build
 build:
 	@docker run --rm -v $$(pwd):/workspace $(CUDA_IMAGE) \
-		nvcc /workspace/$(SOURCE) -o /workspace/$(TARGET) 2>&1 \
+		nvcc $(INCLUDES) $(addprefix /workspace/,$(ALL_SOURCES)) \
+		-o /workspace/$(TARGET) 2>&1 \
 		| grep -E "error|warning" || echo "✓ Build successful"
 
 .PHONY: clean
 clean:
 	rm -f $(TARGET)
+
+.PHONY: list-sources
+list-sources:
+	@echo "Main: $(MAIN_SRC)"
+	@echo "Sources: $(SOURCES)"
+
+# ============================================================================
+# Native CUDA targets (for systems with CUDA installed, e.g., Google Colab)
+# ============================================================================
+
+.PHONY: build-native
+build-native:
+	nvcc $(INCLUDES) $(ALL_SOURCES) -o $(TARGET)
+	@echo "✓ Build successful"
+
+.PHONY: run
+run: build-native
+	./$(TARGET)
 
 .DEFAULT_GOAL := check
