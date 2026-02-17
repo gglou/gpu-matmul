@@ -9,7 +9,7 @@
 #include "kernels/coalesced_kernel.h"
 // Add more kernels here as you implement them:
 // #include "kernels/tiled_kernel.h"
-// #include "kernels/shared_mem_kernel.h"
+#include "kernels/shared_mem_kernel.h"
 
 int main() {
     // Matrix dimensions: M x K * K x N = M x N
@@ -78,6 +78,17 @@ int main() {
     );
     gpu_results.push_back(coalesced_result);
     print_benchmark_result(coalesced_result);
+
+    // Shared memory kernel
+    BenchmarkResult shared_mem_result = benchmark_gpu_kernel(
+        shared_mem_kernel, 
+        "Shared Memory Kernel", 
+        d_a, d_b, d_c, 
+        dims,
+        dim3(16, 16)
+    );
+    gpu_results.push_back(shared_mem_result);
+    print_benchmark_result(shared_mem_result);
 
     // ========================================================================
     // Add more kernels here as you implement them:
