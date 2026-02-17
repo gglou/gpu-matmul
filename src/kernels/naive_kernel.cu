@@ -1,10 +1,10 @@
 #include "naive_kernel.h"
 
 __global__ void naive_kernel_matmul(float *a, float *b, float *c, int M, int N, int K) {
-    // x = row.
-    int x = blockIdx.y * blockDim.y + threadIdx.y;
+    // x = row. threadIdx.x varies the row → uncoalesced access.
+    int x = blockIdx.y * blockDim.y + threadIdx.x;
     // y = column.
-    int y = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.x * blockDim.x + threadIdx.y;
   
     // threadId = threadIdx.x + blockDim.x * threadIdx.y
 
