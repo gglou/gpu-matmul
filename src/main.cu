@@ -66,9 +66,6 @@ int main() {
     gpu_results.push_back(naive_result);
     print_benchmark_result(naive_result);
 
-    // Copy result for verification (using last kernel run)
-    cudaMemcpy(h_c, d_c, sizeof(float) * dims.M * dims.N, cudaMemcpyDeviceToHost);
-
     // Memory coalesced kernel
     BenchmarkResult coalesced_result = benchmark_gpu_kernel(
         coalesced_kernel_matmul, 
@@ -89,6 +86,9 @@ int main() {
     );
     gpu_results.push_back(shared_mem_result);
     print_benchmark_result(shared_mem_result);
+
+    // Copy shared memory kernel result for verification
+    cudaMemcpy(h_c, d_c, sizeof(float) * dims.M * dims.N, cudaMemcpyDeviceToHost);
 
     // ========================================================================
     // Add more kernels here as you implement them:

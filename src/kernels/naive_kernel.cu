@@ -2,9 +2,9 @@
 
 __global__ void naive_kernel_matmul(float *a, float *b, float *c, int M, int N, int K) {
     // x = row.
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int x = blockIdx.y * blockDim.y + threadIdx.y;
     // y = column.
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int y = blockIdx.x * blockDim.x + threadIdx.x;
   
     // threadId = threadIdx.x + blockDim.x * threadIdx.y
 
