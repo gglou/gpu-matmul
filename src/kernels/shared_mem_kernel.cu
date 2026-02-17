@@ -1,4 +1,4 @@
-#include "shared_mem_kernel"
+#include "shared_mem_kernel.h"
 
 #define BLOCKSIZE 16
 
