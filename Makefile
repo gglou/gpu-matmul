@@ -1,16 +1,28 @@
 # Makefile for CUDA compilation
 # - Docker targets (check, build): for macOS or systems without native CUDA
 # - Native targets (build-native, run): for systems with CUDA installed (e.g., Colab)
+#
+# Usage:
+#   make run KERNEL=naive              (default)
+#   make run KERNEL=coalesced
+#   make run KERNEL=shared_mem
+#   make run KERNEL=1d_blocktiling
 
 CUDA_IMAGE = nvidia/cuda:12.0.0-devel-ubuntu22.04
-TARGET = matrix_mul
+
+# Which kernel to build/run (override on command line)
+KERNEL ?= naive
+
+TARGET = run_$(KERNEL)
 
 # Source directories
 SRC_DIR = src
 KERNEL_DIR = $(SRC_DIR)/kernels
 
-# Source files
-MAIN_SRC = $(SRC_DIR)/main.cu
+# The runner file for the selected kernel
+RUNNER = $(SRC_DIR)/run_$(KERNEL).cu
+
+# Library sources (shared across all runners)
 SOURCES = $(SRC_DIR)/benchmark.cu \
           $(SRC_DIR)/utils.cu \
           $(KERNEL_DIR)/cublas_matmul.cu \
@@ -22,11 +34,15 @@ SOURCES = $(SRC_DIR)/benchmark.cu \
 # Libraries
 LIBS = -lcublas
 
-# All sources combined
-ALL_SOURCES = $(MAIN_SRC) $(SOURCES)
+# All sources for the selected kernel
+ALL_SOURCES = $(RUNNER) $(SOURCES)
 
 # Include directories
 INCLUDES = -I./$(SRC_DIR)
+
+# ============================================================================
+# Docker targets (for macOS or systems without native CUDA)
+# ============================================================================
 
 .PHONY: check
 check:
@@ -43,11 +59,11 @@ build:
 
 .PHONY: clean
 clean:
-	rm -f $(TARGET)
+	rm -f run_naive run_coalesced run_shared_mem run_1d_blocktiling
 
 .PHONY: list-sources
 list-sources:
-	@echo "Main: $(MAIN_SRC)"
+	@echo "Runner:  $(RUNNER)"
 	@echo "Sources: $(SOURCES)"
 
 # ============================================================================
@@ -57,7 +73,7 @@ list-sources:
 .PHONY: build-native
 build-native:
 	nvcc $(INCLUDES) $(ALL_SOURCES) $(LIBS) -o $(TARGET)
-	@echo "✓ Build successful"
+	@echo "✓ Build successful: $(TARGET)"
 
 .PHONY: run
 run: build-native
