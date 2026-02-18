@@ -47,7 +47,7 @@ __global__ void blocktiling_1d_kernel(float *a, float *b, float *c, int M, int N
 
       // force memory coalescing.
       // Now aCol will be (0..8, 0..8, ) 64 times. (Using the faster index x).
-      const linearThreadId = tx + ty * blockDim.x;
+      const int linearThreadId = tx + ty * blockDim.x;
       
       const int aCol = linearThreadId % BK;
       // Now aRow will be (0, 0, ..., 1, 1, ...., 63, ...).
