@@ -88,19 +88,25 @@ int main() {
     gpu_results.push_back(shared_mem_result);
     print_benchmark_result(shared_mem_result);
 
-    // Copy shared memory kernel result for verification
-    cudaMemcpy(h_c, d_c, sizeof(float) * dims.M * dims.N, cudaMemcpyDeviceToHost);
-
     // 1D Block Tiling kernel
+    // BN=64 threads in x, BM/TM = 64/8 = 8 threads in y
+    // Grid: ceil(N/BN) x ceil(M/BM) since each block covers a 64x64 tile
+    const int BM = 64, BN = 64;
     BenchmarkResult blocktiling_1d_result = benchmark_gpu_kernel(
         blocktiling_1d_kernel, 
         "1D Block Tiling Kernel", 
         d_a, d_b, d_c, 
         dims,
-        dim3(64, 8)
+        dim3(64, 8),
+        100,
+        dim3((dims.N + BN - 1) / BN, (dims.M + BM - 1) / BM)
     );
     gpu_results.push_back(blocktiling_1d_result);
     print_benchmark_result(blocktiling_1d_result);
+
+    // Copy shared memory kernel result for verification
+    cudaMemcpy(h_c, d_c, sizeof(float) * dims.M * dims.N, cudaMemcpyDeviceToHost);
+
 
     // ========================================================================
     // Add more kernels here as you implement them:

@@ -12,10 +12,14 @@ BenchmarkResult benchmark_gpu_kernel(
     float *d_a, float *d_b, float *d_c, 
     const MatrixDims &dims,
     dim3 threadsPerBlock,
-    int num_runs
+    int num_runs,
+    dim3 blocksPerGrid
 ) {
-    dim3 blocksPerGrid((dims.N + threadsPerBlock.x - 1) / threadsPerBlock.x,
-                       (dims.M + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    // If no custom grid was provided, compute it assuming 1 thread = 1 output element.
+    if (blocksPerGrid.x == 0 && blocksPerGrid.y == 0) {
+        blocksPerGrid = dim3((dims.N + threadsPerBlock.x - 1) / threadsPerBlock.x,
+                             (dims.M + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    }
 
     // Create CUDA events for timing
     cudaEvent_t start, stop;

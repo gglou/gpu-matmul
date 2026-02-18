@@ -15,7 +15,8 @@ BenchmarkResult benchmark_gpu_kernel(
     float *d_a, float *d_b, float *d_c, 
     const MatrixDims &dims,
     dim3 threadsPerBlock = dim3(16, 16),
-    int num_runs = 100
+    int num_runs = 100,
+    dim3 blocksPerGrid = dim3(0, 0)
 );
 
 // ============================================================================
