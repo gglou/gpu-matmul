@@ -51,10 +51,10 @@ __global__ void blocktiling_1d_kernel(float *a, float *b, float *c, int M, int N
       
       const int aCol = linearThreadId % BK;
       // Now aRow will be (0, 0, ..., 1, 1, ...., 63, ...).
-      const int aRow = (BM * by + linearThreadId / BK);
+      const int aRow = linearThreadId / BK;
 
       if (aRow < M && (i + aCol) < K) {
-        As[aRow][aCol] = a[aRow * K + i + aCol];
+        As[aRow][aCol] = a[(BM * by + aRow) * K + i + aCol];
       }
       else {
         As[aRow][aCol] = 0.0f;
