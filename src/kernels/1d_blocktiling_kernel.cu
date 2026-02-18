@@ -45,11 +45,19 @@ __global__ void blocktiling_1d_kernel(float *a, float *b, float *c, int M, int N
 
     for (int i = 0; i < K; i+= BK) {
 
+      // force memory coalescing.
+      // Now aCol will be (0..8, 0..8, ) 64 times. (Using the faster index x).
+      const linearThreadId = tx + ty * blockDim.x;
+      
+      const int aCol = linearThreadId % BK;
+      // Now aRow will be (0, 0, ..., 1, 1, ...., 63, ...).
+      const int aRow = (BM * by + linearThreadId / BK);
+
       if ((BM * by + tx) < M && (i + ty) < K) {
-        As[tx][ty] = a[(BM * by + tx) * K + i + ty];
+        As[aRow][aCol] = a[aRow * K + i + aCol];
       }
       else {
-        As[tx][ty] = 0.0f;
+        As[aRow][aCol] = 0.0f;
       }
 
       // (i + ty) * N to go to the correct row.
@@ -62,11 +70,12 @@ __global__ void blocktiling_1d_kernel(float *a, float *b, float *c, int M, int N
       
       __syncthreads();
       
-      for (int tid = 0; tid < TM; tid++) {
-        for (int j = 0; j < BK; j++) {
-            threadSum[tid] += As[ty * TM + tid][j] * Bs[j][tx];
+      for (int j = 0; j < BK; j++) {
+        float b_val = Bs[j][tx];  // load once from shmem
+        for (int tid = 0; tid < TM; tid++) {
+            threadSum[tid] += As[ty * TM + tid][j] * b_val;
         }
-      }
+    }
 
       __syncthreads();
 
