@@ -16,7 +16,8 @@ SOURCES = $(SRC_DIR)/benchmark.cu \
           $(KERNEL_DIR)/cublas_matmul.cu \
           $(KERNEL_DIR)/naive_kernel.cu \
           $(KERNEL_DIR)/coalesced_kernel.cu \
-          $(KERNEL_DIR)/shared_mem_kernel.cu
+          $(KERNEL_DIR)/shared_mem_kernel.cu \
+          $(KERNEL_DIR)/1d_blocktiling_kernel.cu
 
 # Libraries
 LIBS = -lcublas

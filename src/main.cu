@@ -10,6 +10,7 @@
 // Add more kernels here as you implement them:
 // #include "kernels/tiled_kernel.h"
 #include "kernels/shared_mem_kernel.h"
+#include "kernels/1d_blocktiling_kernel.h"
 
 int main() {
     // Matrix dimensions: M x K * K x N = M x N
@@ -90,20 +91,20 @@ int main() {
     // Copy shared memory kernel result for verification
     cudaMemcpy(h_c, d_c, sizeof(float) * dims.M * dims.N, cudaMemcpyDeviceToHost);
 
+    // 1D Block Tiling kernel
+    BenchmarkResult blocktiling_1d_result = benchmark_gpu_kernel(
+        blocktiling_1d_kernel, 
+        "1D Block Tiling Kernel", 
+        d_a, d_b, d_c, 
+        dims,
+        dim3(64, 8)
+    );
+    gpu_results.push_back(blocktiling_1d_result);
+    print_benchmark_result(blocktiling_1d_result);
+
     // ========================================================================
     // Add more kernels here as you implement them:
     // ========================================================================
-    
-    // Example: Tiled kernel
-    // BenchmarkResult tiled_result = benchmark_gpu_kernel(
-    //     tiled_kernel_matmul, 
-    //     "Tiled Kernel", 
-    //     d_a, d_b, d_c, 
-    //     dims,
-    //     dim3(32, 32)  // Can customize block size per kernel
-    // );
-    // gpu_results.push_back(tiled_result);
-    // print_benchmark_result(tiled_result);
 
     // ========================================================================
     // Benchmark cuBLAS (optimized baseline)

@@ -4,9 +4,9 @@
 
 __global__ void shared_mem_kernel(float *a, float *b, float *c, int M, int N, int K) {
     // x = column.
-    int cX = blockIdx.x * blockDim.x + threadIdx.x;
+    const int cX = blockIdx.x * blockDim.x + threadIdx.x;
     // y = row.
-    int cY = blockIdx.y * blockDim.y + threadIdx.y;
+    const int cY = blockIdx.y * blockDim.y + threadIdx.y;
 
     // shared memory cache.
     __shared__ float As[BLOCKSIZE][BLOCKSIZE];
@@ -15,8 +15,8 @@ __global__ void shared_mem_kernel(float *a, float *b, float *c, int M, int N, in
     float sum = 0.0f;
 
     // Shared memory has the same dimensions as the block.
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
+    const int tx = threadIdx.x;
+    const int ty = threadIdx.y;
 
     for (int i = 0; i < K; i+= BLOCKSIZE) {
 
