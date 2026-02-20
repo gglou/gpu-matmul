@@ -10,9 +10,9 @@ int main() {
 
     // ── Dimensions ──────────────────────────────────────────────────────────
     // A: M × K   B: K × N   C: M × N
-    const int M = 2048;
-    const int N = 1536;
-    const int K = 1024;
+    const int M = 4096;
+    const int N = 4096;
+    const int K = 4096;
     MatrixDims dims = {M, N, K};
 
     // ── Tile parameters ──────────────────────────────────────────────────────
