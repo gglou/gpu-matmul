@@ -16,7 +16,9 @@ int main() {
     MatrixDims dims = {M, N, K};
 
     // ── Tile parameters ──────────────────────────────────────────────────────
-    constexpr int BM = 64, BN = 64, BK = 8;
+    // BM=128, BN=128 gives (BN/TN) * (BM/TM) = 16 * 16 = 256 threads = 8 warps.
+    // Previously BM=BN=64 → 64 threads = 2 warps, starving the warp scheduler.
+    constexpr int BM = 128, BN = 128, BK = 8;
     constexpr int TM = 8, TN = 8;
 
     std::cout << "2D Block Tiling Kernel\n";

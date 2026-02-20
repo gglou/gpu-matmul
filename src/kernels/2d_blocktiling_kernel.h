@@ -32,15 +32,14 @@ __global__ void blocktiling_2d_kernel(float *a, float *b, float *c, int M, int N
       const int loadPerThreadA = (BM * BK) / numThreads;
       const int loadPerThreadB = (BK * BN) / numThreads;
 
-      // To force memory coalesces, we want la to be contributing to y-axis.
-      // so that the next thread in the warp reads from the +1 on the x-axis.
-      // We also want tx to advance the column and ty the rows.
+      // Linearize thread ID so consecutive warp threads get consecutive aCol
+      // values → full warp reads a contiguous row of A (coalesced).
+      const int linearThreadId = ty * blockDim.x + tx;
       for (int la = 0; la < loadPerThreadA; la++) {
-         // We "switch" ty & tx because they have the same value.
-         // Otherwise we'd linerize the thread id and "swap" their increments.
-         const int aRow = ty * TM + la;
-         const int aCol = tx;
-         
+         const int idx = linearThreadId + la * numThreads;
+         const int aRow = idx / BK;
+         const int aCol = idx % BK;
+
          if ((BM * by + aRow) < M && (i + aCol) < K) {
              As[aRow][aCol] = a[(BM * by + aRow) * K + i + aCol];
          } else {
@@ -48,10 +47,9 @@ __global__ void blocktiling_2d_kernel(float *a, float *b, float *c, int M, int N
          }
       }
 
-      // Load Bs[BK][BN]: linearize thread id for correct 2D mapping.
-      const int tid = ty * blockDim.x + tx;
+      // Load Bs[BK][BN]: reuse linearThreadId for correct 2D mapping.
       for (int lb = 0; lb < loadPerThreadB; lb++) {
-        int linearIdx = tid + lb * numThreads;
+        int linearIdx = linearThreadId + lb * numThreads;
         int bRow = linearIdx / BN;
         int bCol = linearIdx % BN;
         if ((i + bRow) < K && (BN * bx + bCol) < N) {
@@ -63,12 +61,12 @@ __global__ void blocktiling_2d_kernel(float *a, float *b, float *c, int M, int N
       
       __syncthreads();
 
-        // Calculate the correct Tids.
-        for (int tid_n = 0; tid_n < TN; tid_n++) {
-            for (int j = 0; j < BK; j++) {
-                float bVal = Bs[j][(tx * TN + tid_n)];
-                for (int tid_m = 0; tid_m < TM; tid_m++) {
-                    threadSum[tid_m * TN + tid_n] += As[ty * TM + tid_m][j] * bVal;
+        // j → tid_m → tid_n: load each As value once, reuse it across all TN columns.
+        for (int j = 0; j < BK; j++) {
+            for (int tid_m = 0; tid_m < TM; tid_m++) {
+                float aVal = As[ty * TM + tid_m][j];  // loaded once, reused TN times
+                for (int tid_n = 0; tid_n < TN; tid_n++) {
+                    threadSum[tid_m * TN + tid_n] += aVal * Bs[j][tx * TN + tid_n];
                 }
             }
         }
