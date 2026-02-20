@@ -5,8 +5,8 @@ template <int BM, int BN, int BK, int TM, int TN>
 __global__ void blocktiling_2d_kernel(float *a, float *b, float *c, int M, int N, int K) {
 
     // shared memory cache.
-    __shared__ float As[BM][BK];
-    __shared__ float Bs[BK][BN];
+    __shared__ float As[BM][BK + 1];
+    __shared__ float Bs[BK][BN + 1];
 
     // 2D - block tiling on register file.
     float threadSum[TM * TN] = {0.0f};
