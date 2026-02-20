@@ -15,9 +15,15 @@ int main() {
     const int K = 1024;
     MatrixDims dims = {M, N, K};
 
+    // ── Tile parameters ──────────────────────────────────────────────────────
+    constexpr int BM = 64, BN = 64, BK = 8;
+    constexpr int TM = 8;
+
     std::cout << "1D Block Tiling Kernel\n";
     std::cout << "Matrix: (" << M << " x " << K << ") * ("
-              << K << " x " << N << ") = (" << M << " x " << N << ")\n\n";
+              << K << " x " << N << ") = (" << M << " x " << N << ")\n";
+    std::cout << "Tile:   BM=" << BM << " BN=" << BN
+              << " BK=" << BK << " TM=" << TM << "\n\n";
 
     // ── Allocate ────────────────────────────────────────────────────────────
     float *h_a = (float*)malloc(sizeof(float) * M * K);
@@ -42,13 +48,12 @@ int main() {
     print_benchmark_result(cublas_result);
 
     // ── Kernel ──────────────────────────────────────────────────────────────
-    const int BM = 64, BN = 64;
-    dim3 threads(BN, BM / 8);          // (64, 8)
+    dim3 threads(BN, BM / TM);               // (64, 8)
     dim3 blocks((N + BN - 1) / BN,
                 (M + BM - 1) / BM);
 
     BenchmarkResult result = benchmark_gpu_kernel(
-        blocktiling_1d_kernel,
+        blocktiling_1d_kernel<BM, BN, BK, TM>,
         "1D Block Tiling Kernel",
         d_a, d_b, d_c,
         dims,

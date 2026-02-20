@@ -4,7 +4,7 @@
 #include "benchmark.h"
 #include "utils.h"
 #include "kernels/cublas_matmul.h"
-#include "kernels/shared_mem_kernel.h"
+#include "kernels/2d_blocktiling_kernel.h"
 
 int main() {
 
@@ -16,12 +16,14 @@ int main() {
     MatrixDims dims = {M, N, K};
 
     // ── Tile parameters ──────────────────────────────────────────────────────
-    constexpr int BLOCKSIZE = 16;
+    constexpr int BM = 64, BN = 64, BK = 8;
+    constexpr int TM = 8, TN = 8;
 
-    std::cout << "Shared Memory Kernel\n";
+    std::cout << "2D Block Tiling Kernel\n";
     std::cout << "Matrix: (" << M << " x " << K << ") * ("
               << K << " x " << N << ") = (" << M << " x " << N << ")\n";
-    std::cout << "Tile:   BLOCKSIZE=" << BLOCKSIZE << "\n\n";
+    std::cout << "Tile:   BM=" << BM << " BN=" << BN
+              << " BK=" << BK << " TM=" << TM << " TN=" << TN << "\n\n";
 
     // ── Allocate ────────────────────────────────────────────────────────────
     float *h_a = (float*)malloc(sizeof(float) * M * K);
@@ -46,14 +48,18 @@ int main() {
     print_benchmark_result(cublas_result);
 
     // ── Kernel ──────────────────────────────────────────────────────────────
-    dim3 threads(BLOCKSIZE, BLOCKSIZE);
+    dim3 threads(BN / TN, BM / TM);          // (8, 8)
+    dim3 blocks((N + BN - 1) / BN,
+                (M + BM - 1) / BM);
 
     BenchmarkResult result = benchmark_gpu_kernel(
-        shared_mem_kernel<BLOCKSIZE>,
-        "Shared Memory Kernel",
+        blocktiling_2d_kernel<BM, BN, BK, TM, TN>,
+        "2D Block Tiling Kernel",
         d_a, d_b, d_c,
         dims,
-        threads
+        threads,
+        100,
+        blocks
     );
     print_benchmark_result(result);
 

@@ -7,6 +7,7 @@
 #   make run KERNEL=coalesced
 #   make run KERNEL=shared_mem
 #   make run KERNEL=1d_blocktiling
+#   make run KERNEL=2d_blocktiling
 
 CUDA_IMAGE = nvidia/cuda:12.0.0-devel-ubuntu22.04
 
@@ -27,9 +28,7 @@ SOURCES = $(SRC_DIR)/benchmark.cu \
           $(SRC_DIR)/utils.cu \
           $(KERNEL_DIR)/cublas_matmul.cu \
           $(KERNEL_DIR)/naive_kernel.cu \
-          $(KERNEL_DIR)/coalesced_kernel.cu \
-          $(KERNEL_DIR)/shared_mem_kernel.cu \
-          $(KERNEL_DIR)/1d_blocktiling_kernel.cu
+          $(KERNEL_DIR)/coalesced_kernel.cu
 
 # Libraries
 LIBS = -lcublas
@@ -59,7 +58,7 @@ build:
 
 .PHONY: clean
 clean:
-	rm -f run_naive run_coalesced run_shared_mem run_1d_blocktiling
+	rm -f run_naive run_coalesced run_shared_mem run_1d_blocktiling run_2d_blocktiling
 
 .PHONY: list-sources
 list-sources:
