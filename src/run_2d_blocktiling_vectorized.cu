@@ -77,6 +77,12 @@ int main() {
         100,
         blocks
     );
+
+    // Check for launch / async errors the benchmark doesn't catch
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error: " << cudaGetErrorString(err) << "\n";
+
     print_benchmark_result(result);
 
     // Verify
