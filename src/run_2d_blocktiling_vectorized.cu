@@ -39,11 +39,12 @@ int main() {
 
     initialize_matrices(h_a, h_b, dims);
 
-    float *d_a, *d_b, *d_c, *d_a_t;
-    cudaMalloc((void**)&d_a,   sizeof(float) * M * K);
-    cudaMalloc((void**)&d_b,   sizeof(float) * K * N);
-    cudaMalloc((void**)&d_c,   sizeof(float) * M * N);
-    cudaMalloc((void**)&d_a_t, sizeof(float) * K * M);   // transposed
+    float *d_a, *d_b, *d_c, *d_c_ref, *d_a_t;
+    cudaMalloc((void**)&d_a,     sizeof(float) * M * K);
+    cudaMalloc((void**)&d_b,     sizeof(float) * K * N);
+    cudaMalloc((void**)&d_c,     sizeof(float) * M * N);
+    cudaMalloc((void**)&d_c_ref, sizeof(float) * M * N);
+    cudaMalloc((void**)&d_a_t,   sizeof(float) * K * M);   // transposed
 
     cudaMemcpy(d_a, h_a, sizeof(float) * M * K, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, h_b, sizeof(float) * K * N, cudaMemcpyHostToDevice);
@@ -57,10 +58,10 @@ int main() {
         std::cout << "Transposed A  (MxK row-major -> KxM row-major)\n\n";
     }
 
-    // cuBLAS reference
+    // cuBLAS reference (writes to its own buffer)
     cublas_init();
-    BenchmarkResult cublas_result = benchmark_cublas(d_a, d_b, d_c, dims);
-    cudaMemcpy(h_ref, d_c, sizeof(float) * M * N, cudaMemcpyDeviceToHost);
+    BenchmarkResult cublas_result = benchmark_cublas(d_a, d_b, d_c_ref, dims);
+    cudaMemcpy(h_ref, d_c_ref, sizeof(float) * M * N, cudaMemcpyDeviceToHost);
     print_benchmark_result(cublas_result);
 
     // Kernel
@@ -96,7 +97,7 @@ int main() {
     // Cleanup
     cublas_destroy();
     free(h_a); free(h_b); free(h_c); free(h_ref);
-    cudaFree(d_a); cudaFree(d_b); cudaFree(d_c); cudaFree(d_a_t);
+    cudaFree(d_a); cudaFree(d_b); cudaFree(d_c); cudaFree(d_c_ref); cudaFree(d_a_t);
 
     return 0;
 }
