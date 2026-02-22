@@ -63,13 +63,13 @@ inline MatmulTestContext setup_test(
     cudaMemcpy(ctx.d_a, ctx.h_a, sizeof(float) * M * K, cudaMemcpyHostToDevice);
     cudaMemcpy(ctx.d_b, ctx.h_b, sizeof(float) * K * N, cudaMemcpyHostToDevice);
 
-    // cuBLAS reference — runs before profiler region so it won't pollute the trace
-    cublas_init();
-    ctx.cublas_result = benchmark_cublas(ctx.d_a, ctx.d_b, ctx.d_c_ref, ctx.dims);
-    cudaMemcpy(ctx.h_ref, ctx.d_c_ref, sizeof(float) * M * N, cudaMemcpyDeviceToHost);
-
-    if (mode == RunMode::Benchmark)
+    // cuBLAS reference — skipped entirely in profile mode (no verification needed).
+    if (mode == RunMode::Benchmark) {
+        cublas_init();
+        ctx.cublas_result = benchmark_cublas(ctx.d_a, ctx.d_b, ctx.d_c_ref, ctx.dims);
+        cudaMemcpy(ctx.h_ref, ctx.d_c_ref, sizeof(float) * M * N, cudaMemcpyDeviceToHost);
         print_benchmark_result(ctx.cublas_result);
+    }
 
     return ctx;
 }
@@ -171,15 +171,15 @@ BenchmarkResult run_kernel_custom(
 // ============================================================================
 
 inline void verify_and_report(MatmulTestContext& ctx, const BenchmarkResult& result) {
+    if (ctx.mode == RunMode::Profile) return;
+
     int M = ctx.dims.M, N = ctx.dims.N;
     cudaMemcpy(ctx.h_c, ctx.d_c, sizeof(float) * M * N, cudaMemcpyDeviceToHost);
     verify_results(ctx.h_c, ctx.h_ref, M * N, "cuBLAS");
 
-    if (ctx.mode == RunMode::Benchmark) {
-        std::cout << "Speed: " << ctx.cublas_result.avg_time / result.avg_time
-                  << "x cuBLAS  (" << result.gflops << " vs "
-                  << ctx.cublas_result.gflops << " GFLOPS)\n";
-    }
+    std::cout << "Speed: " << ctx.cublas_result.avg_time / result.avg_time
+              << "x cuBLAS  (" << result.gflops << " vs "
+              << ctx.cublas_result.gflops << " GFLOPS)\n";
 }
 
 // ============================================================================
@@ -187,7 +187,7 @@ inline void verify_and_report(MatmulTestContext& ctx, const BenchmarkResult& res
 // ============================================================================
 
 inline void cleanup_test(MatmulTestContext& ctx) {
-    cublas_destroy();
+    if (ctx.mode == RunMode::Benchmark) cublas_destroy();
     free(ctx.h_a); free(ctx.h_b); free(ctx.h_c); free(ctx.h_ref);
     cudaFree(ctx.d_a); cudaFree(ctx.d_b); cudaFree(ctx.d_c); cudaFree(ctx.d_c_ref);
 }
