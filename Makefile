@@ -8,6 +8,8 @@
 #   make run KERNEL=shared_mem
 #   make run KERNEL=1d_blocktiling
 #   make run KERNEL=2d_blocktiling
+#   make run KERNEL=2d_blocktiling_vectorized
+#   make run KERNEL=autotune_vectorized
 
 CUDA_IMAGE = nvidia/cuda:12.0.0-devel-ubuntu22.04
 
@@ -58,7 +60,7 @@ build:
 
 .PHONY: clean
 clean:
-	rm -f run_naive run_coalesced run_shared_mem run_1d_blocktiling run_2d_blocktiling
+	rm -f run_naive run_coalesced run_shared_mem run_1d_blocktiling run_2d_blocktiling run_2d_blocktiling_vectorized run_autotune_vectorized
 
 .PHONY: list-sources
 list-sources:
