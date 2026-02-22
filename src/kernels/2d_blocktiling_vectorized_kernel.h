@@ -42,6 +42,7 @@ __global__ void blocktiling_2d_vectorized_kernel(
             const int aCol = idx / BM;
             const int aRow = idx % BM;
 
+            // Here aCol and aRow are switched because A is transposed.
             float4 val = *reinterpret_cast<const float4 *>(
                 &a_t[(i + aCol) * M + BM * by + aRow]);
 

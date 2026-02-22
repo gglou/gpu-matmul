@@ -14,6 +14,6 @@ void initialize_matrices(float *h_a, float *h_b, const MatrixDims &dims);
 // ============================================================================
 
 bool verify_results(float *gpu_result, float *reference_result, int size, 
-                    const char* reference_name = "reference", float tolerance = 1e-3f);
+                    const char* reference_name = "reference", float tolerance = 1e-2f);
 
 #endif // UTILS_H

@@ -38,6 +38,8 @@ bool verify_results(float *gpu_result, float *reference_result, int size,
         max_error = std::max(max_error, error);
         if (error > tolerance) {
             std::cout << "❌ Verification FAILED!\n";
+            std::cout.precision(10);
+            std::cout << std::fixed;
             std::cout << "Mismatch at index " << i << ": kernel=" << gpu_result[i] 
                       << " " << reference_name << "=" << reference_result[i] 
                       << " error=" << error << "\n";
