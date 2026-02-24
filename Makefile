@@ -9,7 +9,7 @@
 #   make run KERNEL=1d_blocktiling
 #   make run KERNEL=2d_blocktiling
 #   make run KERNEL=2d_blocktiling_vectorized
-#   make run KERNEL=autotune_vectorized
+#   make run KERNEL=autotune
 #   make run KERNEL=reduce_shared_memory_banks
 #
 # Profile a kernel with ncu (single launch, no benchmark loop):
@@ -96,7 +96,7 @@ ptx:
 
 .PHONY: clean
 clean:
-	rm -f run_naive run_coalesced run_shared_mem run_1d_blocktiling run_2d_blocktiling run_2d_blocktiling_vectorized run_autotune_vectorized run_reduce_shared_memory_banks
+	rm -f run_naive run_coalesced run_shared_mem run_1d_blocktiling run_2d_blocktiling run_2d_blocktiling_vectorized run_autotune run_reduce_shared_memory_banks
 	rm -rf $(INSPECT_DIR)
 
 .PHONY: list-sources
