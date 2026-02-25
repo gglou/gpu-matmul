@@ -19,6 +19,7 @@ struct MatrixDims {
 };
 
 // Kernel function pointer type
-typedef void (*MatmulKernel)(float*, float*, float*, int, int, int);
+// C = alpha * A * B + beta * C  (SGEMM-style)
+typedef void (*MatmulKernel)(float*, float*, float*, int, int, int, float, float);
 
 #endif // COMMON_H

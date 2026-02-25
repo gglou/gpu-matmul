@@ -1,8 +1,8 @@
-#ifndef BLOCKTILING_2D_VECTORIZED_KERNEL_H
-#define BLOCKTILING_2D_VECTORIZED_KERNEL_H
+#ifndef BLOCKTILING_2D_TRANSPOSE_KERNEL_H
+#define BLOCKTILING_2D_TRANSPOSE_KERNEL_H
 
 template <int BM, int BN, int BK, int TM, int TN>
-__global__ void blocktiling_2d_vectorized_kernel(
+__global__ void blocktiling_2d_transpose_kernel(
     float *a_t,   // transposed A: KxM row-major  (a_t[k*M+m] = A[m][k])
     float *b,   
     float *c, 
@@ -10,7 +10,7 @@ __global__ void blocktiling_2d_vectorized_kernel(
     float alpha, float beta
 ) {
     // shared memory cache.
-    __shared__ float As[BM][BK];
+    __shared__ float As[BM][BK + 1];
     __shared__ float Bs[BK][BN];
 
     // 2D block tiling on register file.
@@ -105,4 +105,4 @@ __global__ void blocktiling_2d_vectorized_kernel(
     }
 }
 
-#endif // BLOCKTILING_2D_VECTORIZED_KERNEL_H
+#endif // BLOCKTILING_2D_TRANSPOSE_KERNEL_H

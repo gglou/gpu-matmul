@@ -2,7 +2,8 @@
 #define SHARED_MEM_KERNEL_H
 
 template <int BLOCKSIZE>
-__global__ void shared_mem_kernel(float *a, float *b, float *c, int M, int N, int K) {
+__global__ void shared_mem_kernel(float *a, float *b, float *c, int M, int N, int K,
+                                   float alpha, float beta) {
     // x = column.
     const int cX = blockIdx.x * blockDim.x + threadIdx.x;
     // y = row.
@@ -48,7 +49,8 @@ __global__ void shared_mem_kernel(float *a, float *b, float *c, int M, int N, in
     }
 
     if (cY < M && cX < N) {
-      c[cY * N + cX] = sum;
+      // C = alpha * (A*B) + beta * C
+      c[cY * N + cX] = alpha * sum + beta * c[cY * N + cX];
     }
 }
 

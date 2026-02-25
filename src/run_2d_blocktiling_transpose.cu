@@ -1,5 +1,5 @@
 #include "test_harness.h"
-#include "kernels/reduce_shared_memory_banks_kernel.h"
+#include "kernels/2d_blocktiling_transpose_kernel.h"
 
 // Transpose A (MxK row-major) -> A_T (KxM row-major)
 // After: a_t[k * M + m] = a[m * K + k]
@@ -38,7 +38,7 @@ struct Launcher {
     void launch() const {
         dim3 threads(BN / TN, BM / TM);
         dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
-        reduce_shared_memory_banks_kernel<BM, BN, BK, TM, TN>
+        blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN>
             <<<blocks, threads>>>(d_a_t, d_b, d_c, M, N, K, 1.0f, 0.0f);
     }
 };
@@ -47,7 +47,7 @@ struct Launcher {
 int main(int argc, char** argv) {
     constexpr int BM = 128, BN = 128, BK = 8, TM = 8, TN = 8;
 
-    auto ctx = setup_test("Reduce Shared Memory Banks Kernel (A^T + float4)", parse_mode(argc, argv));
+    auto ctx = setup_test("2D Block Tiling Transpose Kernel (A^T, no float4)", parse_mode(argc, argv));
 
     int M = ctx.dims.M, N = ctx.dims.N, K = ctx.dims.K;
 
@@ -76,8 +76,8 @@ int main(int argc, char** argv) {
     dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
 
     BenchmarkResult result = run_kernel_custom(ctx,
-        "Reduce Shared Memory Banks (A^T + float4)",
-        [&]{ reduce_shared_memory_banks_kernel<BM, BN, BK, TM, TN>
+        "2D Block Tiling Transpose (A^T, no float4)",
+        [&]{ blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN>
                  <<<blocks, threads>>>(d_a_t, ctx.d_b, ctx.d_c, M, N, K, 1.0f, 0.0f); });
 
     verify_and_report(ctx, result);

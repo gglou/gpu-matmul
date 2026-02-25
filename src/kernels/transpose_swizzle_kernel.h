@@ -1,5 +1,5 @@
-#ifndef REDUCE_SHARED_MEMORY_BANKS_KERNEL_H
-#define REDUCE_SHARED_MEMORY_BANKS_KERNEL_H
+#ifndef TRANSPOSE_SWIZZLE_KERNEL_H
+#define TRANSPOSE_SWIZZLE_KERNEL_H
 
 // XOR-swizzle to reduce shared-memory bank conflicts.
 //
@@ -18,7 +18,7 @@ __device__ __forceinline__ int swizzle(int idx) {
 }
 
 template <int BM, int BN, int BK, int TM, int TN>
-__global__ void reduce_shared_memory_banks_kernel(
+__global__ void transpose_swizzle_kernel(
     float *a_t,   // transposed A: KxM row-major  (a_t[k*M+m] = A[m][k])
     float *b,   
     float *c, 
@@ -27,8 +27,7 @@ __global__ void reduce_shared_memory_banks_kernel(
 ) {
     // shared memory cache.
     // As is stored column-major (k outer, m inner) with XOR-swizzle on the
-    // m index to eliminate bank conflicts on shared stores (was 4-way with
-    // the old BK+1 padding trick).
+    // m index to eliminate bank conflicts.
     __shared__ float As[BK][BM];
     __shared__ float Bs[BK][BN];
 
@@ -46,11 +45,11 @@ __global__ void reduce_shared_memory_banks_kernel(
     const int cCol = BN * bx + tx * TN;
     const int cRow = BM * by + ty * TM;
 
-    // Calculate how many float4 loads per thread we need for As and Bs.
+    // Calculate how many scalar loads per thread we need for As and Bs.
     const int numThreads = blockDim.x * blockDim.y;
     const int linearThreadId = ty * blockDim.x + tx;
-    const int loadPerThreadA = (BM * BK) / (numThreads * 4);
-    const int loadPerThreadB = (BK * BN) / (numThreads * 4);
+    const int loadPerThreadA = (BM * BK) / numThreads;
+    const int loadPerThreadB = (BK * BN) / numThreads;
 
     for (int i = 0; i < K; i += BK) {
 
@@ -58,34 +57,21 @@ __global__ void reduce_shared_memory_banks_kernel(
         // Linearize in column-major order (aCol outer, aRow inner)
         // so consecutive threads -> consecutive aRow -> stride-1 in A_T -> coalesced.
         for (int la = 0; la < loadPerThreadA; la++) {
-            const int idx = (linearThreadId + la * numThreads) * 4;
+            const int idx = linearThreadId + la * numThreads;
             const int aCol = idx / BM;
             const int aRow = idx % BM;
 
-            // Here aCol and aRow are switched because A is transposed.
-            float4 val = *reinterpret_cast<const float4 *>(
-                &a_t[(i + aCol) * M + BM * by + aRow]);
-
-            As[aCol][swizzle<TM>(aRow + 0)] = val.x;
-            As[aCol][swizzle<TM>(aRow + 1)] = val.y;
-            As[aCol][swizzle<TM>(aRow + 2)] = val.z;
-            As[aCol][swizzle<TM>(aRow + 3)] = val.w;
+            As[aCol][swizzle<TM>(aRow)] = a_t[(i + aCol) * M + BM * by + aRow];
         }
 
         // Load Bs from B (row-major linearization).
         // Consecutive threads -> consecutive bCol -> stride-1 in B -> coalesced.
         for (int lb = 0; lb < loadPerThreadB; lb++) {
-            int idx = (linearThreadId + lb * numThreads) * 4;
+            int idx = linearThreadId + lb * numThreads;
             int bRow = idx / BN;
             int bCol = idx % BN;
 
-            float4 val = *reinterpret_cast<const float4 *>(
-                &b[(i + bRow) * N + BN * bx + bCol]);
-
-            Bs[bRow][swizzle<TN>(bCol + 0)] = val.x;
-            Bs[bRow][swizzle<TN>(bCol + 1)] = val.y;
-            Bs[bRow][swizzle<TN>(bCol + 2)] = val.z;
-            Bs[bRow][swizzle<TN>(bCol + 3)] = val.w;
+            Bs[bRow][swizzle<TN>(bCol)] = b[(i + bRow) * N + BN * bx + bCol];
         }
 
         __syncthreads();
@@ -103,25 +89,13 @@ __global__ void reduce_shared_memory_banks_kernel(
         __syncthreads();
     }
 
-    // C = alpha * (A*B) + beta * C  — float4 stores (TN must be a multiple of 4).
+    // C = alpha * (A*B) + beta * C  — scalar stores.
     for (int tid_m = 0; tid_m < TM; tid_m++) {
-        for (int tid_n = 0; tid_n < TN; tid_n += 4) {
-            const int base = (cRow + tid_m) * N + cCol + tid_n;
-            // Load c values first into a register
-            float4 c_reg = *reinterpret_cast<const float4 *>(&c[base]);
-
-            // Do math in registers
-            float4 result = make_float4(
-                alpha * threadSum[tid_m * TN + tid_n + 0] + beta * c_reg.x,
-                alpha * threadSum[tid_m * TN + tid_n + 1] + beta * c_reg.y,
-                alpha * threadSum[tid_m * TN + tid_n + 2] + beta * c_reg.z,
-                alpha * threadSum[tid_m * TN + tid_n + 3] + beta * c_reg.w
-            );
-
-            // Assign back the result
-            *reinterpret_cast<float4 *>(&c[base]) = result;
+        for (int tid_n = 0; tid_n < TN; tid_n++) {
+            const int idx = (cRow + tid_m) * N + cCol + tid_n;
+            c[idx] = alpha * threadSum[tid_m * TN + tid_n] + beta * c[idx];
         }
     }
 }
 
-#endif // REDUCE_SHARED_MEMORY_BANKS_KERNEL_H
+#endif // TRANSPOSE_SWIZZLE_KERNEL_H

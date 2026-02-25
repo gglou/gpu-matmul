@@ -13,7 +13,9 @@ BenchmarkResult benchmark_gpu_kernel(
     const MatrixDims &dims,
     dim3 threadsPerBlock,
     int num_runs,
-    dim3 blocksPerGrid
+    dim3 blocksPerGrid,
+    float alpha,
+    float beta
 ) {
     // If no custom grid was provided, compute it assuming 1 thread = 1 output element.
     if (blocksPerGrid.x == 0 && blocksPerGrid.y == 0) {
@@ -27,7 +29,7 @@ BenchmarkResult benchmark_gpu_kernel(
     cudaEventCreate(&stop);
 
     // Warm-up run
-    kernel<<<blocksPerGrid, threadsPerBlock>>>(d_a, d_b, d_c, dims.M, dims.N, dims.K);
+    kernel<<<blocksPerGrid, threadsPerBlock>>>(d_a, d_b, d_c, dims.M, dims.N, dims.K, alpha, beta);
     cudaDeviceSynchronize();
 
     // Benchmark runs
@@ -39,7 +41,7 @@ BenchmarkResult benchmark_gpu_kernel(
 
     for (int run = 0; run < num_runs; ++run) {
         cudaEventRecord(start);
-        kernel<<<blocksPerGrid, threadsPerBlock>>>(d_a, d_b, d_c, dims.M, dims.N, dims.K);
+        kernel<<<blocksPerGrid, threadsPerBlock>>>(d_a, d_b, d_c, dims.M, dims.N, dims.K, alpha, beta);
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         
@@ -55,7 +57,8 @@ BenchmarkResult benchmark_gpu_kernel(
     cudaEventDestroy(stop);
 
     double avg_ms = total_time / num_runs;
-    double flops = 2.0 * dims.M * dims.N * dims.K;
+    // 2*M*N*K for the multiply-accumulate + M*N each for: alpha scale, beta scale, final add
+    double flops = 2.0 * dims.M * dims.N * dims.K + 3.0 * dims.M * dims.N;
     double gflops = flops / (avg_ms * 1e6);
 
     return {kernel_name, avg_ms, min_time, max_time, num_runs, gflops};

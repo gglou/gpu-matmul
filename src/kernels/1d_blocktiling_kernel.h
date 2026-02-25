@@ -2,7 +2,8 @@
 #define BLOCKTILING_1D_KERNEL_H
 
 template <int BM, int BN, int BK, int TM>
-__global__ void blocktiling_1d_kernel(float *a, float *b, float *c, int M, int N, int K) {
+__global__ void blocktiling_1d_kernel(float *a, float *b, float *c, int M, int N, int K,
+                                       float alpha, float beta) {
 
     // shared memory cache.
     __shared__ float As[BM][BK];
@@ -65,9 +66,11 @@ __global__ void blocktiling_1d_kernel(float *a, float *b, float *c, int M, int N
 
     }
 
+    // C = alpha * (A*B) + beta * C
     for (int tid = 0; tid < TM; tid++) {
       if ((cStartRow + tid) < M && cCol < N) {
-        c[(cStartRow + tid) * N + cCol] = threadSum[tid];
+        const int idx = (cStartRow + tid) * N + cCol;
+        c[idx] = alpha * threadSum[tid] + beta * c[idx];
       }
     }
 }

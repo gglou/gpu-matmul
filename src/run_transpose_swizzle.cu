@@ -1,5 +1,5 @@
 #include "test_harness.h"
-#include "kernels/reduce_shared_memory_banks_kernel.h"
+#include "kernels/transpose_swizzle_kernel.h"
 
 // Transpose A (MxK row-major) -> A_T (KxM row-major)
 // After: a_t[k * M + m] = a[m * K + k]
@@ -11,11 +11,13 @@ __global__ void transpose_to_col_major(float *out, const float *in, int rows, in
 }
 
 // ── Autotune configs ──────────────────────────────────────────────────────────
-// Constraints (float4 loads):
+// This kernel uses scalar (non-float4) global loads so the float4 divisibility
+// constraint doesn't apply. Constraints:
 //   numThreads = (BM/TM)*(BN/TN) <= 1024
-//   (BM*BK) % (numThreads*4) == 0   and   (BK*BN) % (numThreads*4) == 0
-//   shared memory (BM*(BK+1) + BK*BN)*4 <= 65536 bytes
+//   (BM*BK) % numThreads == 0   and   (BK*BN) % numThreads == 0
+//   shared memory (BK*BM + BK*BN)*4 <= 65536 bytes  (no +1 padding)
 using AllConfigs = std::tuple<
+    TileConfig<128, 128,  8, 8, 8>,
     TileConfig<128, 128, 16, 8, 8>,
     TileConfig<128, 128, 16, 8, 4>,
     TileConfig<128, 128, 16, 4, 8>,
@@ -26,6 +28,7 @@ using AllConfigs = std::tuple<
     TileConfig< 64, 128, 32, 4, 8>,
     TileConfig<128,  64, 16, 8, 4>,
     TileConfig<128,  64, 32, 8, 4>,
+    TileConfig< 64,  64,  8, 8, 8>,
     TileConfig< 64,  64, 16, 4, 4>,
     TileConfig< 64,  64, 32, 4, 4>
 >;
@@ -38,16 +41,16 @@ struct Launcher {
     void launch() const {
         dim3 threads(BN / TN, BM / TM);
         dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
-        reduce_shared_memory_banks_kernel<BM, BN, BK, TM, TN>
+        transpose_swizzle_kernel<BM, BN, BK, TM, TN>
             <<<blocks, threads>>>(d_a_t, d_b, d_c, M, N, K, 1.0f, 0.0f);
     }
 };
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main(int argc, char** argv) {
-    constexpr int BM = 128, BN = 128, BK = 8, TM = 8, TN = 8;
+    constexpr int BM = 64, BN = 64, BK = 8, TM = 8, TN = 8;
 
-    auto ctx = setup_test("Reduce Shared Memory Banks Kernel (A^T + float4)", parse_mode(argc, argv));
+    auto ctx = setup_test("Transpose + Swizzle Kernel (A^T + swizzle, no float4)", parse_mode(argc, argv));
 
     int M = ctx.dims.M, N = ctx.dims.N, K = ctx.dims.K;
 
@@ -76,8 +79,8 @@ int main(int argc, char** argv) {
     dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
 
     BenchmarkResult result = run_kernel_custom(ctx,
-        "Reduce Shared Memory Banks (A^T + float4)",
-        [&]{ reduce_shared_memory_banks_kernel<BM, BN, BK, TM, TN>
+        "Transpose + Swizzle (A^T + swizzle, no float4)",
+        [&]{ transpose_swizzle_kernel<BM, BN, BK, TM, TN>
                  <<<blocks, threads>>>(d_a_t, ctx.d_b, ctx.d_c, M, N, K, 1.0f, 0.0f); });
 
     verify_and_report(ctx, result);

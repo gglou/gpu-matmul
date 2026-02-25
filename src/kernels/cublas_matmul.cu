@@ -86,7 +86,8 @@ BenchmarkResult benchmark_cublas(float *d_a, float *d_b, float *d_c,
     cudaEventDestroy(stop);
 
     double avg_ms = total_time / num_runs;
-    double flops = 2.0 * dims.M * dims.N * dims.K;
+    // 2*M*N*K for the multiply-accumulate + M*N each for: alpha scale, beta scale, final add
+    double flops = 2.0 * dims.M * dims.N * dims.K + 3.0 * dims.M * dims.N;
     double gflops = flops / (avg_ms * 1e6);
 
     return {"cuBLAS", avg_ms, min_time, max_time, num_runs, gflops};

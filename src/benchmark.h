@@ -9,6 +9,7 @@
 // ============================================================================
 
 // Benchmark any GPU kernel that follows the MatmulKernel signature
+// C = alpha * A * B + beta * C  (alpha=1, beta=0 → pure matmul)
 BenchmarkResult benchmark_gpu_kernel(
     MatmulKernel kernel,
     const char* kernel_name,
@@ -16,7 +17,9 @@ BenchmarkResult benchmark_gpu_kernel(
     const MatrixDims &dims,
     dim3 threadsPerBlock = dim3(16, 16),
     int num_runs = 100,
-    dim3 blocksPerGrid = dim3(0, 0)
+    dim3 blocksPerGrid = dim3(0, 0),
+    float alpha = 1.0f,
+    float beta  = 0.0f
 );
 
 // ============================================================================

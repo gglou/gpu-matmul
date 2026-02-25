@@ -2,7 +2,8 @@
 #define BLOCKTILING_2D_KERNEL_H
 
 template <int BM, int BN, int BK, int TM, int TN>
-__global__ void blocktiling_2d_kernel(float *a, float *b, float *c, int M, int N, int K) {
+__global__ void blocktiling_2d_kernel(float *a, float *b, float *c, int M, int N, int K,
+                                       float alpha, float beta) {
 
     // shared memory cache.
     __shared__ float As[BM][BK];
@@ -75,11 +76,12 @@ __global__ void blocktiling_2d_kernel(float *a, float *b, float *c, int M, int N
 
     }
 
-    // Assign back to Cij.
+    // C = alpha * (A*B) + beta * C
     for (int tid_m = 0; tid_m < TM; tid_m++) {
         for (int tid_n = 0; tid_n < TN; tid_n++) {
             if ((cRow + tid_m) < M && (cCol + tid_n) < N) {
-                c[(cRow + tid_m) * N + cCol + tid_n] = threadSum[tid_m * TN + tid_n];
+                const int idx = (cRow + tid_m) * N + cCol + tid_n;
+                c[idx] = alpha * threadSum[tid_m * TN + tid_n] + beta * c[idx];
             }
         }
     }
