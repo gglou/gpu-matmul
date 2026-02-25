@@ -1,20 +1,14 @@
 #include "test_harness.h"
 #include "kernels/2d_blocktiling_transpose_kernel.h"
 
-// Transpose A (MxK row-major) -> A_T (KxM row-major)
-// After: a_t[k * M + m] = a[m * K + k]
-__global__ void transpose_to_col_major(float *out, const float *in, int rows, int cols) {
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    if (col < cols && row < rows)
-        out[col * rows + row] = in[row * cols + col];
-}
-
 // ── Autotune configs ──────────────────────────────────────────────────────────
-// Constraints (float4 loads):
+// Constraints (float4 loads along K for A, along N for B):
 //   numThreads = (BM/TM)*(BN/TN) <= 1024
-//   (BM*BK) % (numThreads*4) == 0   and   (BK*BN) % (numThreads*4) == 0
-//   shared memory (BM*(BK+1) + BK*BN)*4 <= 65536 bytes
+//   BK % 4 == 0                          (float4 A loads along K)
+//   BN % 4 == 0                          (float4 B loads along N)
+//   rowStrideA = numThreads*4/BK          must divide BM
+//   (BK*BN) % (numThreads*4) == 0
+//   shared memory (BK*BM + BK*BN)*4 <= 65536 bytes
 using AllConfigs = std::tuple<
     TileConfig<128, 128, 16, 8, 8>,
     TileConfig<128, 128, 16, 8, 4>,
@@ -31,7 +25,7 @@ using AllConfigs = std::tuple<
 >;
 
 struct Launcher {
-    float *d_a_t, *d_b, *d_c;
+    float *d_a, *d_b, *d_c;
     int M, N, K;
 
     template<int BM, int BN, int BK, int TM, int TN>
@@ -39,7 +33,7 @@ struct Launcher {
         dim3 threads(BN / TN, BM / TM);
         dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
         blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN>
-            <<<blocks, threads>>>(d_a_t, d_b, d_c, M, N, K, 1.0f, 0.0f);
+            <<<blocks, threads>>>(d_a, d_b, d_c, M, N, K, 1.0f, 0.0f);
     }
 };
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,24 +41,13 @@ struct Launcher {
 int main(int argc, char** argv) {
     constexpr int BM = 128, BN = 128, BK = 8, TM = 8, TN = 8;
 
-    auto ctx = setup_test("2D Block Tiling Transpose Kernel (A^T, no float4)", parse_mode(argc, argv));
+    auto ctx = setup_test("2D Block Tiling Transpose Kernel (on-the-fly A^T)", parse_mode(argc, argv));
 
     int M = ctx.dims.M, N = ctx.dims.N, K = ctx.dims.K;
 
-    // Transpose A -> A_T (done before profiler / autotune region)
-    float *d_a_t;
-    cudaMalloc((void**)&d_a_t, sizeof(float) * K * M);
-    {
-        dim3 t(32, 32);
-        dim3 b((K + 31) / 32, (M + 31) / 32);
-        transpose_to_col_major<<<b, t>>>(d_a_t, ctx.d_a, M, K);
-        cudaDeviceSynchronize();
-        std::cout << "Transposed A  (MxK row-major -> KxM row-major)\n\n";
-    }
-
     if (ctx.mode == RunMode::Autotune) {
-        run_autotune_tiled(AllConfigs{}, ctx, Launcher{d_a_t, ctx.d_b, ctx.d_c, M, N, K});
-        cudaFree(d_a_t);
+        run_autotune_tiled(AllConfigs{}, ctx,
+                           Launcher{ctx.d_a, ctx.d_b, ctx.d_c, M, N, K});
         cleanup_test(ctx);
         return 0;
     }
@@ -75,13 +58,11 @@ int main(int argc, char** argv) {
     dim3 threads(BN / TN, BM / TM);
     dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
 
-    BenchmarkResult result = run_kernel_custom(ctx,
-        "2D Block Tiling Transpose (A^T, no float4)",
-        [&]{ blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN>
-                 <<<blocks, threads>>>(d_a_t, ctx.d_b, ctx.d_c, M, N, K, 1.0f, 0.0f); });
+    BenchmarkResult result = run_kernel(
+        ctx, blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN>,
+        "2D Block Tiling Transpose (on-the-fly A^T)", threads, blocks);
 
     verify_and_report(ctx, result);
-    cudaFree(d_a_t);
     cleanup_test(ctx);
     return 0;
 }

@@ -1,17 +1,7 @@
 #ifndef REDUCE_SHARED_MEMORY_BANKS_KERNEL_H
 #define REDUCE_SHARED_MEMORY_BANKS_KERNEL_H
 
-// XOR-swizzle to reduce shared-memory bank conflicts.
-//
-// Problem:  when threads in a warp access shared memory with a stride
-//           that is a power-of-two, the low bits of the address repeat,
-//           causing multi-way bank conflicts.
-//
-// Fix:      XOR bits [5 + log2(T)-1 : 5] (which DO vary across threads)
-//           into the bottom log2(T) bits, spreading accesses across all
-//           32 banks.
-//
-// Use the same call on both STORE and LOAD paths.
+// XOR-swizzle: spread accesses across all 32 banks.
 template <int T>
 __device__ __forceinline__ int swizzle(int idx) {
     return idx ^ ((idx >> 5) & (T - 1));
@@ -19,21 +9,20 @@ __device__ __forceinline__ int swizzle(int idx) {
 
 template <int BM, int BN, int BK, int TM, int TN>
 __global__ void reduce_shared_memory_banks_kernel(
-    float *a_t,   // transposed A: KxM row-major  (a_t[k*M+m] = A[m][k])
-    float *b,   
-    float *c, 
+    float *a,   // A: M×K row-major
+    float *b,
+    float *c,
     int M, int N, int K,
     float alpha, float beta
 ) {
-    // shared memory cache.
-    // As is stored column-major (k outer, m inner) with XOR-swizzle on the
-    // m index to eliminate bank conflicts on shared stores (was 4-way with
-    // the old BK+1 padding trick).
+    // As[k][m] transposed + swizzled on m index.
     __shared__ float As[BK][BM];
     __shared__ float Bs[BK][BN];
 
     // 2D block tiling on register file.
     float threadSum[TM * TN] = {0.0f};
+    float regM[TM] = {0.0f};
+    float regN[TN] = {0.0f};
 
     // thread "coordinates"
     const int tx = threadIdx.x;
@@ -46,34 +35,29 @@ __global__ void reduce_shared_memory_banks_kernel(
     const int cCol = BN * bx + tx * TN;
     const int cRow = BM * by + ty * TM;
 
-    // Calculate how many float4 loads per thread we need for As and Bs.
     const int numThreads = blockDim.x * blockDim.y;
     const int linearThreadId = ty * blockDim.x + tx;
-    const int loadPerThreadA = (BM * BK) / (numThreads * 4);
+
+    // A load: float4 along K, scatter-transposed into As[k][swizzle(m)].
+    const int innerColA = linearThreadId % (BK / 4);
+    const int innerRowA = linearThreadId / (BK / 4);
+    constexpr int rowStrideA = ((BM * BN) / (TM * TN) * 4) / BK;
+
     const int loadPerThreadB = (BK * BN) / (numThreads * 4);
 
     for (int i = 0; i < K; i += BK) {
 
-        // Load As from transposed A.
-        // Linearize in column-major order (aCol outer, aRow inner)
-        // so consecutive threads -> consecutive aRow -> stride-1 in A_T -> coalesced.
-        for (int la = 0; la < loadPerThreadA; la++) {
-            const int idx = (linearThreadId + la * numThreads) * 4;
-            const int aCol = idx / BM;
-            const int aRow = idx % BM;
-
-            // Here aCol and aRow are switched because A is transposed.
-            float4 val = *reinterpret_cast<const float4 *>(
-                &a_t[(i + aCol) * M + BM * by + aRow]);
-
-            As[aCol][swizzle<TM>(aRow + 0)] = val.x;
-            As[aCol][swizzle<TM>(aRow + 1)] = val.y;
-            As[aCol][swizzle<TM>(aRow + 2)] = val.z;
-            As[aCol][swizzle<TM>(aRow + 3)] = val.w;
+        // Load A tile, transposing on-the-fly into As[k][swizzle(m)].
+        for (int offset = 0; offset < BM; offset += rowStrideA) {
+            float4 tmp = *reinterpret_cast<const float4 *>(
+                &a[(BM * by + innerRowA + offset) * K + i + innerColA * 4]);
+            As[innerColA * 4 + 0][swizzle<TM>(innerRowA + offset)] = tmp.x;
+            As[innerColA * 4 + 1][swizzle<TM>(innerRowA + offset)] = tmp.y;
+            As[innerColA * 4 + 2][swizzle<TM>(innerRowA + offset)] = tmp.z;
+            As[innerColA * 4 + 3][swizzle<TM>(innerRowA + offset)] = tmp.w;
         }
 
-        // Load Bs from B (row-major linearization).
-        // Consecutive threads -> consecutive bCol -> stride-1 in B -> coalesced.
+        // Load Bs from B (row-major, coalesced) with swizzle.
         for (int lb = 0; lb < loadPerThreadB; lb++) {
             int idx = (linearThreadId + lb * numThreads) * 4;
             int bRow = idx / BN;
@@ -90,14 +74,14 @@ __global__ void reduce_shared_memory_banks_kernel(
 
         __syncthreads();
 
-        // j -> tid_m -> tid_n: load each As value once, reuse it across all TN columns.
         for (int j = 0; j < BK; j++) {
-            for (int tid_m = 0; tid_m < TM; tid_m++) {
-                float aVal = As[j][swizzle<TM>(ty * TM + tid_m)];  // loaded once, reused TN times
-                for (int tid_n = 0; tid_n < TN; tid_n++) {
-                    threadSum[tid_m * TN + tid_n] += aVal * Bs[j][swizzle<TN>(tx * TN + tid_n)];
-                }
-            }
+            for (int tid_m = 0; tid_m < TM; tid_m++)
+                regM[tid_m] = As[j][swizzle<TM>(ty * TM + tid_m)];
+            for (int tid_n = 0; tid_n < TN; tid_n++)
+                regN[tid_n] = Bs[j][swizzle<TN>(tx * TN + tid_n)];
+            for (int tid_m = 0; tid_m < TM; tid_m++)
+                for (int tid_n = 0; tid_n < TN; tid_n++)
+                    threadSum[tid_m * TN + tid_n] += regM[tid_m] * regN[tid_n];
         }
 
         __syncthreads();
