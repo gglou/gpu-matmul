@@ -32,23 +32,23 @@ __global__ void blocktiling_2d_transpose_kernel(
     const int numThreads = blockDim.x * blockDim.y;
     const int linearThreadId = ty * blockDim.x + tx;
 
-    // A load: float4 along K, scatter-transposed into As[k][m].
-    const int innerColA = linearThreadId % (BK / 4);
-    const int innerRowA = linearThreadId / (BK / 4);
-    constexpr int rowStrideA = ((BM * BN) / (TM * TN) * 4) / BK;
-
+    const int loadPerThreadA = (BM * BK) / (numThreads * 4);
     const int loadPerThreadB = (BK * BN) / (numThreads * 4);
 
     for (int i = 0; i < K; i += BK) {
 
         // Load A tile, transposing on-the-fly into As[k][m].
-        for (int offset = 0; offset < BM; offset += rowStrideA) {
-            float4 tmp = *reinterpret_cast<const float4 *>(
-                &a[(BM * by + innerRowA + offset) * K + i + innerColA * 4]);
-            As[innerColA * 4 + 0][innerRowA + offset] = tmp.x;
-            As[innerColA * 4 + 1][innerRowA + offset] = tmp.y;
-            As[innerColA * 4 + 2][innerRowA + offset] = tmp.z;
-            As[innerColA * 4 + 3][innerRowA + offset] = tmp.w;
+        for (int la = 0; la < loadPerThreadA; la++) {
+            int idx = (linearThreadId + la * numThreads) * 4;
+            int aRow = idx / BK;
+            int aCol = idx % BK;
+
+            float4 val = *reinterpret_cast<const float4 *>(
+                &a[(BM * by + aRow) * K + i + aCol]);
+            As[aCol + 0][aRow] = val.x;
+            As[aCol + 1][aRow] = val.y;
+            As[aCol + 2][aRow] = val.z;
+            As[aCol + 3][aRow] = val.w;
         }
 
         // Load Bs from B (row-major, coalesced).
