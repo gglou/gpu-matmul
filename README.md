@@ -12,10 +12,9 @@ https://www.aleksagordic.com/blog/matmul
 
 ```
 gpu-matmul/
-├── Makefile
+├── Justfile
 ├── README.md
 └── src/
-    ├── main.cu           # Main program
     ├── common.h          # Shared types (MatrixDims, BenchmarkResult, kernel typedef)
     ├── benchmark.h/cu    # GPU benchmarking framework
     ├── utils.h/cu        # Matrix initialization and verification
@@ -26,41 +25,31 @@ gpu-matmul/
 
 ## Adding New Kernels
 
-1. Create a new kernel file in `src/kernels/` (e.g., `tiled_kernel.h` and `tiled_kernel.cu`)
-2. Add the source file to `SOURCES` in the `Makefile`
-3. Include the header in `src/main.cu`
-4. Benchmark it with:
+1. Create a new kernel file in `src/kernels/` (e.g., `tiled_kernel.h`)
+2. Create a corresponding `src/run_tiled.cu` entry point
+3. Include the header in the entry point and wire up the kernel
+4. Build and run it with:
 
-```cpp
-BenchmarkResult result = benchmark_gpu_kernel(
-    your_kernel_matmul,     // kernel function
-    "Your Kernel Name",     // name for display
-    d_a, d_b, d_c,          // device pointers
-    dims,                   // matrix dimensions
-    dim3(16, 16)            // optional: custom block size
-);
-gpu_results.push_back(result);
+```bash
+just run tiled
 ```
 
 ## Building and Testing
 
-### Native CUDA (Google Colab, Linux with CUDA)
+Requires a local CUDA install (native only).
 
 ```bash
-make build-native    # Compile with nvcc
-make run             # Build and run
-```
-
-### Docker (macOS or systems without native CUDA)
-
-```bash
-make check           # Check for compilation errors
-make build           # Compile via Docker
+just run naive                  # Build + run the naive kernel
+just build 2d_blocktiling       # Compile only
+just check naive                # Compile-check (no output binary)
+just profile reduce_shared_memory_banks  # Build + ncu profile
+just sass 2d_blocktiling_vectorized      # Dump SASS assembly
+just ptx  2d_blocktiling_vectorized      # Dump PTX IR
+just autotune reduce_shared_memory_banks # Build + autotune
+just run-all                    # Build + run every kernel sequentially
 ```
 
 ### Other Commands
 
-- `make clean` - Removes the compiled executable
-- `make list-sources` - Shows all source files being compiled
-
-The Docker targets use the `nvidia/cuda:12.0.0-devel-ubuntu22.04` image.
+- `just clean` - Removes all compiled binaries and `inspect/` output
+- `just` - Lists all available recipes
