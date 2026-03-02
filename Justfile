@@ -61,7 +61,7 @@ ptx kernel="naive":
 run-all:
     @for k in naive coalesced shared_mem 1d_blocktiling 2d_blocktiling \
                2d_blocktiling_vectorized 2d_blocktiling_transpose \
-               reduce_shared_memory_banks; do \
+               reduce_shared_memory_banks warptiling pipelining; do \
         echo ""; \
         echo "══════════════════════════════════════════"; \
         echo "  Running: $k"; \
@@ -76,5 +76,6 @@ clean:
     rm -f run_naive run_coalesced run_shared_mem run_1d_blocktiling \
           run_2d_blocktiling run_2d_blocktiling_vectorized \
           run_2d_blocktiling_transpose \
-          run_autotune run_reduce_shared_memory_banks
+          run_autotune run_reduce_shared_memory_banks \
+          run_warptiling run_pipelining
     rm -rf inspect

@@ -1,14 +1,16 @@
-#ifndef WARP_TILING_KERNEL_H
-#define WARP_TILING_KERNEL_H
+#ifndef PING_PONG_PIPELINE_KERNEL_H
+#define PING_PONG_PIPELINE_KERNEL_H
 
 template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
 __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
                                                 float *b, float *c, int M,
                                                 int N, int K, float alpha,
                                                 float beta) {
+  // Pipelining stages.
+  const int NUM_STAGES = 2;
   // As stored transposed: As[k][m] — stride-1 column reads during compute
-  __shared__ float As[BK][BM + 1];
-  __shared__ float Bs[BK][BN];
+  __shared__ float As[NUM_STAGES][BK][BM + 1];
+  __shared__ float Bs[NUM_STAGES][BK][BN];
   // thread "coordinates"
   const int tx = threadIdx.x;
   const int ty = threadIdx.y;
@@ -53,6 +55,8 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
 
   for (int i = 0; i < K; i += BK) {
 
+    const int stage = (i / BK) & 1; // Alternate stages.
+
     // Load A tile, transposing on-the-fly into As[k][m].
     for (int la = 0; la < loadPerThreadA; la++) {
       int idx = (linearThreadId + la * numThreads) * 4;
@@ -61,10 +65,10 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
 
       float4 val = *reinterpret_cast<const float4 *>(
           &a[(BM * by + aRow) * K + i + aCol]);
-      As[aCol + 0][aRow] = val.x;
-      As[aCol + 1][aRow] = val.y;
-      As[aCol + 2][aRow] = val.z;
-      As[aCol + 3][aRow] = val.w;
+      As[stage][aCol + 0][aRow] = val.x;
+      As[stage][aCol + 1][aRow] = val.y;
+      As[stage][aCol + 2][aRow] = val.z;
+      As[stage][aCol + 3][aRow] = val.w;
     }
 
     // Load Bs from B (row-major, coalesced).
@@ -76,10 +80,10 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
       float4 val = *reinterpret_cast<const float4 *>(
           &b[(i + bRow) * N + BN * bx + bCol]);
 
-      Bs[bRow][bCol + 0] = val.x;
-      Bs[bRow][bCol + 1] = val.y;
-      Bs[bRow][bCol + 2] = val.z;
-      Bs[bRow][bCol + 3] = val.w;
+      Bs[stage][bRow][bCol + 0] = val.x;
+      Bs[stage][bRow][bCol + 1] = val.y;
+      Bs[stage][bRow][bCol + 2] = val.z;
+      Bs[stage][bRow][bCol + 3] = val.w;
     }
 
     __syncthreads();
@@ -93,7 +97,7 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
           // go to the correct value for the TM x TN tile
           const int aRow =
               warpRow * WM + wSubRow * WSUBM * TM + threadWarpRow * TM + tid_m;
-          regM[wSubRow * TM + tid_m] = As[j][aRow];
+          regM[wSubRow * TM + tid_m] = As[stage][j][aRow];
         }
       }
 
@@ -102,7 +106,7 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
           // Similar logic to above.
           const int bCol =
               warpCol * WN + wSubCol * WSUBN * TN + threadWarpCol * TN + tid_n;
-          regN[wSubCol * TN + tid_n] = Bs[j][bCol];
+          regN[wSubCol * TN + tid_n] = Bs[stage][j][bCol];
         }
       }
 
@@ -123,8 +127,6 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
           }
         }
       }
-
-      __syncthreads();
     }
   }
 
@@ -158,4 +160,4 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
   }
 }
 
-#endif // WARP_TILING_KERNEL_H
+#endif // PING_PONG_PIPELINE
