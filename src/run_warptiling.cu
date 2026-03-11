@@ -88,7 +88,7 @@ struct Launcher {
         constexpr int numThreads = numWarps * 32;
         dim3 threads(numThreads);
         dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
-        blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>
+        warptiling_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>
             <<<blocks, threads>>>(d_a, d_b, d_c, M, N, K, 1.0f, 0.0f);
     }
 };
@@ -219,7 +219,7 @@ int main(int argc, char** argv) {
     dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
 
     BenchmarkResult result = run_kernel(
-        ctx, blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>,
+        ctx, warptiling_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>,
         "Warp Tiling", threads, blocks);
 
     verify_and_report(ctx, result);

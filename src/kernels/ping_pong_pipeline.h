@@ -19,23 +19,27 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
   const int bx = blockIdx.x;
   const int by = blockIdx.y;
 
-  const int numThreads = blockDim.x * blockDim.y;
+  constexpr int numThreads = ((BM / WM) * (BN / WN)) * 32;
   const int linearThreadId = ty * blockDim.x + tx;
 
-  const int loadPerThreadA = (BM * BK) / (numThreads * 4);
-  const int loadPerThreadB = (BK * BN) / (numThreads * 4);
+  const int innerRowA = linearThreadId / (BK / 4);
+  const int innerColA = linearThreadId % (BK / 4);
+  constexpr int rowStrideA = (numThreads * 4) / BK;
+  const int innerRowB = linearThreadId / (BN / 4);
+  const int innerColB = linearThreadId % (BN / 4);
+  constexpr int rowStrideB = numThreads / (BN / 4);
 
   // Warp specific calculations. Useful for warp-tiling.
-  const int warpSize = 32;
+  constexpr int warpSize = 32;
   const int warpId = linearThreadId / warpSize;
   const int laneId = linearThreadId % 32;
   // How many TM x TN subtiles per thread.
-  const int threadTiles = (WM * WN) / (TM * TN * warpSize);
+  constexpr int threadTiles = (WM * WN) / (TM * TN * warpSize);
   // WMITER and WNITER are the "dimensions" of the thread tiles.
-  const int WNITER = WN / (WSUBN * TN);
-  const int WMITER = threadTiles / WNITER;
+  constexpr int WNITER = WN / (WSUBN * TN);
+  constexpr int WMITER = threadTiles / WNITER;
   // WSUBN * WSUBM == 32.
-  const int WSUBM = warpSize / WSUBN;
+  constexpr int WSUBM = warpSize / WSUBN;
   // This is the warpColumn and warpRow inside the block.
   const int warpRow = (warpId * WN) / BN;
   const int warpCol = warpId % (BN / WN);
@@ -45,45 +49,32 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
   const int threadWarpCol = laneId % WSUBN;
   const int threadWarpRow = laneId / WSUBN;
 
-  const int cRow = BM * by + warpRow * WM + threadWarpRow * TM;
-  const int cCol = BN * bx + warpCol * WN + threadWarpCol * TN;
+  // Advance c to the warp's output tile
+  c += (by * BM + warpRow * WM) * N + bx * BN + warpCol * WN;
 
   // 2D block tiling on register file.
   float threadSum[TM * TN * WNITER * WMITER] = {0.0f};
   float regM[TM * WMITER] = {0.0f};
   float regN[TN * WNITER] = {0.0f};
 
+  int stage = 0;
   for (int i = 0; i < K; i += BK) {
 
-    const int stage = (i / BK) & 1; // Alternate stages.
-
     // Load A tile, transposing on-the-fly into As[k][m].
-    for (int la = 0; la < loadPerThreadA; la++) {
-      int idx = (linearThreadId + la * numThreads) * 4;
-      int aRow = idx / BK;
-      int aCol = idx % BK;
-
+    for (int offset = 0; offset + rowStrideA <= BM; offset += rowStrideA) {
       float4 val = *reinterpret_cast<const float4 *>(
-          &a[(BM * by + aRow) * K + i + aCol]);
-      As[stage][aCol + 0][aRow] = val.x;
-      As[stage][aCol + 1][aRow] = val.y;
-      As[stage][aCol + 2][aRow] = val.z;
-      As[stage][aCol + 3][aRow] = val.w;
+          &a[(BM * by + innerRowA + offset) * K + i + innerColA * 4]);
+      As[stage][innerColA * 4 + 0][innerRowA + offset] = val.x;
+      As[stage][innerColA * 4 + 1][innerRowA + offset] = val.y;
+      As[stage][innerColA * 4 + 2][innerRowA + offset] = val.z;
+      As[stage][innerColA * 4 + 3][innerRowA + offset] = val.w;
     }
 
     // Load Bs from B (row-major, coalesced).
-    for (int lb = 0; lb < loadPerThreadB; lb++) {
-      int idx = (linearThreadId + lb * numThreads) * 4;
-      int bRow = idx / BN;
-      int bCol = idx % BN;
-
-      float4 val = *reinterpret_cast<const float4 *>(
-          &b[(i + bRow) * N + BN * bx + bCol]);
-
-      Bs[stage][bRow][bCol + 0] = val.x;
-      Bs[stage][bRow][bCol + 1] = val.y;
-      Bs[stage][bRow][bCol + 2] = val.z;
-      Bs[stage][bRow][bCol + 3] = val.w;
+    for (int offset = 0; offset + rowStrideB <= BK; offset += rowStrideB) {
+      *reinterpret_cast<float4 *>(&Bs[stage][innerRowB + offset][innerColB * 4]) =
+          *reinterpret_cast<const float4 *>(
+              &b[(i + innerRowB + offset) * N + BN * bx + innerColB * 4]);
     }
 
     __syncthreads();
@@ -128,32 +119,33 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
         }
       }
     }
+
+    stage ^= 1; // Alternate stages.
   }
 
   // C = alpha * (A*B) + beta * C  — float4 stores (TN must be a multiple of 4).
   for (int wSubRow = 0; wSubRow < WMITER; wSubRow++) {
     for (int wSubCol = 0; wSubCol < WNITER; wSubCol++) {
+      float *c_interim =
+          c + (wSubRow * WSUBM * TM) * N + wSubCol * WSUBN * TN;
       for (int tid_m = 0; tid_m < TM; tid_m++) {
         for (int tid_n = 0; tid_n < TN; tid_n += 4) {
           const int resIdx =
               (wSubRow * TM + tid_m) * (WNITER * TN) + wSubCol * TN + tid_n;
 
-          const int base = (cRow + wSubRow * WSUBM * TM + tid_m) * N + cCol +
-                           wSubCol * WSUBN * TN + tid_n;
+          float4 c_reg = *reinterpret_cast<const float4 *>(
+              &c_interim[(threadWarpRow * TM + tid_m) * N +
+                         threadWarpCol * TN + tid_n]);
 
-          // Load c values first into a register.
-          // Keeping TM, TN as 4 is super convenient for vectorized stores.
-          float4 c_reg = *reinterpret_cast<const float4 *>(&c[base]);
-
-          // Do math in registers
           float4 result =
               make_float4(alpha * threadSum[resIdx + 0] + beta * c_reg.x,
                           alpha * threadSum[resIdx + 1] + beta * c_reg.y,
                           alpha * threadSum[resIdx + 2] + beta * c_reg.z,
                           alpha * threadSum[resIdx + 3] + beta * c_reg.w);
 
-          // Assign back the result
-          *reinterpret_cast<float4 *>(&c[base]) = result;
+          *reinterpret_cast<float4 *>(
+              &c_interim[(threadWarpRow * TM + tid_m) * N +
+                         threadWarpCol * TN + tid_n]) = result;
         }
       }
     }

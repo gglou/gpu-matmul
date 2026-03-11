@@ -14,6 +14,9 @@ void cublas_init();
 // Destroy cuBLAS handle (call once at program end)
 void cublas_destroy();
 
+// Access the global cuBLAS handle (must call cublas_init() first)
+cublasHandle_t cublasHandle();
+
 // Benchmark cuBLAS SGEMM implementation
 // Uses cublasSgemm under the hood - highly optimized by NVIDIA
 BenchmarkResult benchmark_cublas(float *d_a, float *d_b, float *d_c, 

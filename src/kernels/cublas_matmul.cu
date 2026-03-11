@@ -21,6 +21,10 @@ void cublas_destroy() {
     cublasDestroy(cublas_handle);
 }
 
+cublasHandle_t cublasHandle() {
+    return cublas_handle;
+}
+
 // ============================================================================
 // cuBLAS Matrix Multiplication
 // ============================================================================
