@@ -109,7 +109,7 @@ struct Launcher {
         constexpr int numThreads = numWarps * 32;
         dim3 threads(numThreads);
         dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
-        blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>
+        ping_pong_pipeline_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>
             <<<blocks, threads>>>(d_a, d_b, d_c, M, N, K, 1.0f, 0.0f);
     }
 };
@@ -216,9 +216,9 @@ void run_autotune_warp_tiled(std::tuple<Cfgs...>,
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main(int argc, char** argv) {
-    constexpr int BM = 128, BN = 128, BK = 8;
+    constexpr int BM = 128, BN = 128, BK = 16;
     constexpr int TM = 4, TN = 4;
-    constexpr int WM = 64, WN = 64, WSUBN = 8;
+    constexpr int WM = 128, WN = 32, WSUBN = 4;
 
     auto ctx = setup_test("Ping Pong Pipeline Kernel", parse_mode(argc, argv));
 
@@ -241,7 +241,7 @@ int main(int argc, char** argv) {
     dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
 
     BenchmarkResult result = run_kernel(
-        ctx, blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>,
+        ctx, ping_pong_pipeline_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>,
         "Ping Pong Pipeline", threads, blocks);
 
     verify_and_report(ctx, result);

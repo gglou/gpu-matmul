@@ -216,9 +216,9 @@ void run_autotune_warp_tiled(std::tuple<Cfgs...>,
 // ─────────────────────────────────────────────────────────────────────────────
 
 int main(int argc, char** argv) {
-    constexpr int BM = 128, BN = 128, BK = 8;
+    constexpr int BM = 128, BN = 128, BK = 16;
     constexpr int TM = 4, TN = 4;
-    constexpr int WM = 64, WN = 64, WSUBN = 8;
+    constexpr int WM = 128, WN = 32, WSUBN = 4;
 
     auto ctx = setup_test("Pipelining Kernel", parse_mode(argc, argv));
 

@@ -3,24 +3,12 @@
 
 #include <cuda_pipeline.h>
 
-template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
-__global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
-                                                float *b, float *c, int M,
-                                                int N, int K, float alpha,
-                                                float beta) {
-  const int NUM_STAGES = 2;
-
-  // As stored transposed: As[k][m] — stride-1 column reads during compute
-  __shared__ float As[NUM_STAGES][BK][BM + 1];
-  __shared__ float Bs[NUM_STAGES][BK][BN];
-
-  const int tx = threadIdx.x;
-  const int ty = threadIdx.y;
-  const int bx = blockIdx.x;
-  const int by = blockIdx.y;
-
+template <int BM, int BN, int BK, int WM, int WN>
+__device__ void load_tile(float *a, float *b, float (&As_stage)[BK][BM + 4],
+                          float (&Bs_stage)[BK][BN], int kOffset, int by,
+                          int bx, int K, int N) {
   constexpr int numThreads = ((BM / WM) * (BN / WN)) * 32;
-  const int linearThreadId = ty * blockDim.x + tx;
+  const int linearThreadId = threadIdx.y * blockDim.x + threadIdx.x;
 
   const int innerRowA = linearThreadId / (BK / 4);
   const int innerColA = linearThreadId % (BK / 4);
@@ -28,6 +16,42 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
   const int innerRowB = linearThreadId / (BN / 4);
   const int innerColB = linearThreadId % (BN / 4);
   constexpr int rowStrideB = numThreads / (BN / 4);
+
+  // Load A tile, transposing on-the-fly into As[k][m].
+  for (int offset = 0; offset + rowStrideA <= BM; offset += rowStrideA) {
+    float4 val = *reinterpret_cast<const float4 *>(
+        &a[(BM * by + innerRowA + offset) * K + kOffset + innerColA * 4]);
+    As_stage[innerColA * 4 + 0][innerRowA + offset] = val.x;
+    As_stage[innerColA * 4 + 1][innerRowA + offset] = val.y;
+    As_stage[innerColA * 4 + 2][innerRowA + offset] = val.z;
+    As_stage[innerColA * 4 + 3][innerRowA + offset] = val.w;
+  }
+
+  for (int offset = 0; offset + rowStrideB <= BK; offset += rowStrideB) {
+    __pipeline_memcpy_async(
+        &Bs_stage[innerRowB + offset][innerColB * 4],
+        &b[(kOffset + innerRowB + offset) * N + BN * bx + innerColB * 4], 16);
+  }
+}
+
+template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
+__global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
+                blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
+                                                float *b, float *c, int M,
+                                                int N, int K, float alpha,
+                                                float beta) {
+  const int NUM_STAGES = 2;
+
+  // As stored transposed: As[k][m] — stride-1 column reads during compute
+  __shared__ float As[NUM_STAGES][BK][BM + 4];
+  __shared__ float Bs[NUM_STAGES][BK][BN];
+
+  const int tx = threadIdx.x;
+  const int ty = threadIdx.y;
+  const int bx = blockIdx.x;
+  const int by = blockIdx.y;
+
+  const int linearThreadId = ty * blockDim.x + tx;
 
   // Warp specific calculations. Useful for warp-tiling.
   constexpr int warpSize = 32;
@@ -56,55 +80,25 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
   float regN[TN * WNITER] = {0.0f};
 
   // Load 0th tile.
-  {
-    // Load A tile, transposing on-the-fly into As[k][m].
-    for (int offset = 0; offset + rowStrideA <= BM; offset += rowStrideA) {
-      float4 val = *reinterpret_cast<const float4 *>(
-          &a[(BM * by + innerRowA + offset) * K + 0 + innerColA * 4]);
-      As[0][innerColA * 4 + 0][innerRowA + offset] = val.x;
-      As[0][innerColA * 4 + 1][innerRowA + offset] = val.y;
-      As[0][innerColA * 4 + 2][innerRowA + offset] = val.z;
-      As[0][innerColA * 4 + 3][innerRowA + offset] = val.w;
-    }
-
-    for (int offset = 0; offset + rowStrideB <= BK; offset += rowStrideB) {
-      __pipeline_memcpy_async(
-          &Bs[0][innerRowB + offset][innerColB * 4],
-          &b[(innerRowB + offset) * N + BN * bx + innerColB * 4], 16);
-    }
-    __pipeline_commit();
-  }
+  load_tile<BM, BN, BK, WM, WN>(a, b, As[0], Bs[0], 0, by, bx, K, N);
+  __pipeline_commit();
 
   int compute_stage = 0;
 
   for (int i = 0; i < K; i += BK) {
     const int load_stage = compute_stage ^ 1;
 
-    // Wait for previous load.
-    __pipeline_wait_prior(0);
-    __syncthreads();
-
-    // Load next tile
+    // Load next tile first so we have 2 pending pipeline stages.
     if (i + BK < K) {
-      const int inext = i + BK;
-      // Load A tile, transposing on-the-fly into As[k][m].
-      for (int offset = 0; offset + rowStrideA <= BM; offset += rowStrideA) {
-        float4 val = *reinterpret_cast<const float4 *>(
-            &a[(BM * by + innerRowA + offset) * K + inext + innerColA * 4]);
-        As[load_stage][innerColA * 4 + 0][innerRowA + offset] = val.x;
-        As[load_stage][innerColA * 4 + 1][innerRowA + offset] = val.y;
-        As[load_stage][innerColA * 4 + 2][innerRowA + offset] = val.z;
-        As[load_stage][innerColA * 4 + 3][innerRowA + offset] = val.w;
-      }
-
-      for (int offset = 0; offset + rowStrideB <= BK; offset += rowStrideB) {
-        __pipeline_memcpy_async(
-            &Bs[load_stage][innerRowB + offset][innerColB * 4],
-            &b[(inext + innerRowB + offset) * N + BN * bx + innerColB * 4], 16);
-      }
+      load_tile<BM, BN, BK, WM, WN>(a, b, As[load_stage], Bs[load_stage],
+                                      i + BK, by, bx, K, N);
     }
-    // Commit async.
     __pipeline_commit();
+
+    // Wait until the current compute_stage's async copies are done.
+    // With 2 pending batches, wait_prior(1) drains the older one.
+    __pipeline_wait_prior(1);
+    __syncthreads();
 
     // Compute stage.
     for (int j = 0; j < BK; j++) {
@@ -139,7 +133,10 @@ __global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
       }
     }
 
-    // Sync before proceeding to the next loading stage.
+    // Ensure all threads finish computing before the next iteration
+    // overwrites this stage's shared memory.
+    __syncthreads();
+
     compute_stage ^= 1;
   }
 

@@ -2,12 +2,13 @@
 #define WARP_TILING_KERNEL_H
 
 template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
-__global__ void warptiling_kernel(float *a, // A: M×K row-major
+__global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
+                warptiling_kernel(float *a, // A: M×K row-major
                                                 float *b, float *c, int M,
                                                 int N, int K, float alpha,
                                                 float beta) {
   // As stored transposed: As[k][m] — stride-1 column reads during compute
-  __shared__ float As[BK][BM + 1];
+  __shared__ float As[BK][BM + 4];
   __shared__ float Bs[BK][BN];
   // thread "coordinates"
   const int tx = threadIdx.x;

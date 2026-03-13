@@ -2,14 +2,15 @@
 #define PING_PONG_PIPELINE_KERNEL_H
 
 template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
-__global__ void blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
+__global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
+                ping_pong_pipeline_kernel(float *a, // A: M×K row-major
                                                 float *b, float *c, int M,
                                                 int N, int K, float alpha,
                                                 float beta) {
   // Pipelining stages.
   const int NUM_STAGES = 2;
   // As stored transposed: As[k][m] — stride-1 column reads during compute
-  __shared__ float As[NUM_STAGES][BK][BM + 1];
+  __shared__ float As[NUM_STAGES][BK][BM + 4];
   __shared__ float Bs[NUM_STAGES][BK][BN];
   // thread "coordinates"
   const int tx = threadIdx.x;
