@@ -10,6 +10,7 @@ src      := "src"
 kernels  := "src/kernels"
 libs     := "-lcublas"
 includes := "-I./src"
+opt      := "-O3"
 shared   := src / "benchmark.cu" + " " + src / "utils.cu" + " " + kernels / "cublas_matmul.cu"
 
 # Default warp-tiling template params: BM,BN,BK,TM,TN,WM,WN,WSUBN
@@ -23,12 +24,12 @@ default:
 
 # Compile-check (no output binary)  (e.g. just check naive)
 check kernel="naive":
-    nvcc {{includes}} -arch=sm_{{sm}} {{src}}/run_{{kernel}}.cu {{shared}} {{libs}} -o /dev/null 2>&1 \
+    nvcc {{opt}} {{includes}} -arch=sm_{{sm}} {{src}}/run_{{kernel}}.cu {{shared}} {{libs}} -o /dev/null 2>&1 \
         | grep -E "error|warning" || echo "✓ No errors found"
 
 # Build a kernel                     (e.g. just build naive)
 build kernel="naive":
-    nvcc {{includes}} -arch=sm_{{sm}} {{src}}/run_{{kernel}}.cu {{shared}} {{libs}} -o run_{{kernel}}
+    nvcc {{opt}} {{includes}} -arch=sm_{{sm}} {{src}}/run_{{kernel}}.cu {{shared}} {{libs}} -o run_{{kernel}}
     @echo "✓ Built: run_{{kernel}}"
 
 # Build + run a kernel               (e.g. just run naive)
@@ -53,7 +54,7 @@ sass kernel="naive": (build kernel)
 # Dump PTX IR                        (e.g. just ptx 2d_blocktiling_vectorized)
 ptx kernel="naive":
     mkdir -p inspect
-    nvcc {{includes}} -arch=sm_{{sm}} {{src}}/run_{{kernel}}.cu {{shared}} {{libs}} --ptx \
+    nvcc {{opt}} {{includes}} -arch=sm_{{sm}} {{src}}/run_{{kernel}}.cu {{shared}} {{libs}} --ptx \
         -o inspect/run_{{kernel}}.sm{{sm}}.ptx
     @echo "✓ PTX written to inspect/run_{{kernel}}.sm{{sm}}.ptx"
 
