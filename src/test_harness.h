@@ -90,7 +90,7 @@ inline BenchmarkResult run_kernel(
     const char* name,
     dim3 threads,
     dim3 blocks = dim3(0, 0),
-    int num_runs = 100)
+    int num_runs = 50)
 {
     if (blocks.x == 0 && blocks.y == 0) {
         blocks = dim3(
@@ -128,7 +128,7 @@ BenchmarkResult run_kernel_custom(
     const MatmulTestContext& ctx,
     const char* name,
     LaunchFn&& launch,
-    int num_runs = 100)
+    int num_runs = 50)
 {
     if (ctx.mode == RunMode::Profile) {
         std::cout << "Profiling '" << name << "' (single launch)...\n";
@@ -166,8 +166,8 @@ BenchmarkResult run_kernel_custom(
     cudaEventDestroy(stop);
 
     double avg = total / num_runs;
-    // 2*M*N*K for the multiply-accumulate + M*N each for: alpha scale, beta scale, final add
-    double gflops = (2.0 * ctx.dims.M * ctx.dims.N * ctx.dims.K + 3.0 * ctx.dims.M * ctx.dims.N) / (avg * 1e6);
+    double flops = 2.0 * ctx.dims.M * ctx.dims.N * ctx.dims.K + 3.0 * ctx.dims.M * ctx.dims.N;
+    double gflops = flops / (mn * 1e6);
     BenchmarkResult result = {name, avg, (double)mn, (double)mx, num_runs, gflops};
     print_benchmark_result(result);
     return result;
@@ -184,7 +184,7 @@ inline void verify_and_report(MatmulTestContext& ctx, const BenchmarkResult& res
     cudaMemcpy(ctx.h_c, ctx.d_c, sizeof(float) * M * N, cudaMemcpyDeviceToHost);
     verify_results(ctx.h_c, ctx.h_ref, M * N, "cuBLAS");
 
-    std::cout << "Speed: " << ctx.cublas_result.avg_time / result.avg_time
+    std::cout << "Speed: " << ctx.cublas_result.min_time / result.min_time
               << "x cuBLAS  (" << result.gflops << " vs "
               << ctx.cublas_result.gflops << " GFLOPS)\n";
 }
@@ -211,39 +211,34 @@ struct TileConfig {
 
 struct AutotuneResult {
     int BM, BN, BK, TM, TN, numThreads, shmem_bytes;
-    double gflops, avg_ms;
+    double gflops, min_ms;
 };
 
-// Benchmark a single (BM, BN, BK, TM, TN) config using the provided Launcher.
-// Launcher must expose:  template<int BM, int BN, int BK, int TM, int TN> void launch() const;
 template<int BM, int BN, int BK, int TM, int TN, typename Launcher>
 AutotuneResult bench_one(const MatmulTestContext& ctx, const Launcher& launcher,
                          int num_runs = 50) {
-    // Warm-up
     launcher.template launch<BM, BN, BK, TM, TN>();
     cudaDeviceSynchronize();
 
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    float total = 0;
+    float mn = 1e9f;
     for (int r = 0; r < num_runs; r++) {
         cudaEventRecord(start);
         launcher.template launch<BM, BN, BK, TM, TN>();
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         float ms; cudaEventElapsedTime(&ms, start, stop);
-        total += ms;
+        mn = std::min(mn, ms);
     }
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
-    double avg    = total / num_runs;
-    // 2*M*N*K for the multiply-accumulate + M*N each for: alpha scale, beta scale, final add
-    double gflops = (2.0 * ctx.dims.M * ctx.dims.N * ctx.dims.K + 3.0 * ctx.dims.M * ctx.dims.N) / (avg * 1e6);
+    double gflops = (2.0 * ctx.dims.M * ctx.dims.N * ctx.dims.K + 3.0 * ctx.dims.M * ctx.dims.N) / (mn * 1e6);
     int nt        = (BN / TN) * (BM / TM);
     int shmem     = (BM * (BK + 1) + BK * BN) * (int)sizeof(float);
-    return {BM, BN, BK, TM, TN, nt, shmem, gflops, avg};
+    return {BM, BN, BK, TM, TN, nt, shmem, gflops, (double)mn};
 }
 
 // Iterate over a tuple of TileConfigs, bench each, print a ranked table.

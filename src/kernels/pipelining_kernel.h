@@ -46,9 +46,13 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
                                                 float beta) {
   const int NUM_STAGES = 2;
 
-  // As[k][m+pad]: stride-1 along m for compute; +4 padding shifts bank pattern between k-steps
-  __shared__ float As[NUM_STAGES][BK][BM + 4];
-  __shared__ float Bs[NUM_STAGES][BK][BN];
+  // Dynamic shared memory — allows large BK without hitting the 48 KB static limit.
+  // Layout: As[2][BK][BM+4] then Bs[2][BK][BN], all contiguous.
+  extern __shared__ __align__(16) char smem[];
+  using As_t = float[BK][BM + 4];
+  using Bs_t = float[BK][BN];
+  auto As = reinterpret_cast<As_t *>(smem);
+  auto Bs = reinterpret_cast<Bs_t *>(smem + NUM_STAGES * sizeof(As_t));
 
   const int tx = threadIdx.x;
   const int ty = threadIdx.y;
@@ -72,8 +76,8 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
   c += (by * BM + warpRow * WM) * N + bx * BN + warpCol * WN;
 
   float threadSum[TM * TN * WNITER * WMITER] = {0.0f};
-  float regM[TM * WMITER] = {0.0f};
-  float regN[TN * WNITER] = {0.0f};
+  float regM[2][TM * WMITER] = {};
+  float regN[2][TN * WNITER] = {};
 
   cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
 
@@ -96,23 +100,45 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
     pipe.consumer_wait();
     __syncthreads();
 
+    // Prologue: load j=0 into register buffer 0
+    for (int wSubRow = 0; wSubRow < WMITER; wSubRow++) {
+      for (int tid_m = 0; tid_m < TM; tid_m++) {
+        const int aRow =
+            warpRow * WM + wSubRow * WSUBM * TM + threadWarpRow * TM + tid_m;
+        regM[0][wSubRow * TM + tid_m] = As[compute_stage][0][aRow];
+      }
+    }
+    for (int wSubCol = 0; wSubCol < WNITER; wSubCol++) {
+      for (int tid_n = 0; tid_n < TN; tid_n++) {
+        const int bCol =
+            warpCol * WN + wSubCol * WSUBN * TN + threadWarpCol * TN + tid_n;
+        regN[0][wSubCol * TN + tid_n] = Bs[compute_stage][0][bCol];
+      }
+    }
+
     for (int j = 0; j < BK; j++) {
-      for (int wSubRow = 0; wSubRow < WMITER; wSubRow++) {
-        for (int tid_m = 0; tid_m < TM; tid_m++) {
-          const int aRow =
-              warpRow * WM + wSubRow * WSUBM * TM + threadWarpRow * TM + tid_m;
-          regM[wSubRow * TM + tid_m] = As[compute_stage][j][aRow];
+      const int cur = j & 1;
+      const int nxt = 1 - cur;
+
+      // Prefetch j+1 into alternate buffer (overlaps with FMAs below)
+      if (j + 1 < BK) {
+        for (int wSubRow = 0; wSubRow < WMITER; wSubRow++) {
+          for (int tid_m = 0; tid_m < TM; tid_m++) {
+            const int aRow =
+                warpRow * WM + wSubRow * WSUBM * TM + threadWarpRow * TM + tid_m;
+            regM[nxt][wSubRow * TM + tid_m] = As[compute_stage][j + 1][aRow];
+          }
+        }
+        for (int wSubCol = 0; wSubCol < WNITER; wSubCol++) {
+          for (int tid_n = 0; tid_n < TN; tid_n++) {
+            const int bCol =
+                warpCol * WN + wSubCol * WSUBN * TN + threadWarpCol * TN + tid_n;
+            regN[nxt][wSubCol * TN + tid_n] = Bs[compute_stage][j + 1][bCol];
+          }
         }
       }
 
-      for (int wSubCol = 0; wSubCol < WNITER; wSubCol++) {
-        for (int tid_n = 0; tid_n < TN; tid_n++) {
-          const int bCol =
-              warpCol * WN + wSubCol * WSUBN * TN + threadWarpCol * TN + tid_n;
-          regN[wSubCol * TN + tid_n] = Bs[compute_stage][j][bCol];
-        }
-      }
-
+      // Compute using current buffer (loads already complete from prev iteration)
       for (int wSubRow = 0; wSubRow < WMITER; wSubRow++) {
         for (int wSubCol = 0; wSubCol < WNITER; wSubCol++) {
           for (int tid_m = 0; tid_m < TM; tid_m++) {
@@ -121,7 +147,7 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
               const int regNIdx = wSubCol * TN + tid_n;
               const int resIdx =
                   (wSubRow * TM + tid_m) * (WNITER * TN) + wSubCol * TN + tid_n;
-              threadSum[resIdx] += regM[regMIdx] * regN[regNIdx];
+              threadSum[resIdx] += regM[cur][regMIdx] * regN[cur][regNIdx];
             }
           }
         }

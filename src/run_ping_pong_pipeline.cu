@@ -118,21 +118,20 @@ struct Launcher {
 struct WarpAutotuneResult {
     int BM, BN, BK, TM, TN, WM, WN, WSUBN;
     int WMITER, WNITER, numThreads, shmem_bytes;
-    double gflops, avg_ms;
+    double gflops, min_ms;
 };
 
 template<int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN,
          typename L>
 WarpAutotuneResult bench_one_warp(const MatmulTestContext& ctx,
                                   const L& launcher, int num_runs = 50) {
-    // Warm-up
     launcher.template launch<BM, BN, BK, TM, TN, WM, WN, WSUBN>();
     cudaDeviceSynchronize();
 
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    float total = 0;
+    float mn = 1e9f;
     for (int r = 0; r < num_runs; r++) {
         cudaEventRecord(start);
         launcher.template launch<BM, BN, BK, TM, TN, WM, WN, WSUBN>();
@@ -140,23 +139,21 @@ WarpAutotuneResult bench_one_warp(const MatmulTestContext& ctx,
         cudaEventSynchronize(stop);
         float ms;
         cudaEventElapsedTime(&ms, start, stop);
-        total += ms;
+        mn = std::min(mn, ms);
     }
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
-    double avg    = total / num_runs;
     double gflops = (2.0 * ctx.dims.M * ctx.dims.N * ctx.dims.K +
-                     3.0 * ctx.dims.M * ctx.dims.N) / (avg * 1e6);
+                     3.0 * ctx.dims.M * ctx.dims.N) / (mn * 1e6);
     constexpr int nw       = (BM / WM) * (BN / WN);
     constexpr int WSUBM    = 32 / WSUBN;
     constexpr int wniter   = WN / (WSUBN * TN);
     constexpr int wmiter   = WM / (WSUBM * TM);
     int nt    = nw * 32;
-    // 2 stages: As[2][BK][BM+1] + Bs[2][BK][BN]
     int shmem = 2 * (BK * (BM + 1) + BK * BN) * (int)sizeof(float);
     return {BM, BN, BK, TM, TN, WM, WN, WSUBN,
-            wmiter, wniter, nt, shmem, gflops, avg};
+            wmiter, wniter, nt, shmem, gflops, (double)mn};
 }
 
 template<typename... Cfgs, typename L>
