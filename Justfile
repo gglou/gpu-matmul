@@ -14,7 +14,7 @@ opt      := "-O3"
 shared   := src / "benchmark.cu" + " " + src / "utils.cu" + " " + kernels / "cublas_matmul.cu"
 
 # Default warp-tiling template params: BM,BN,BK,TM,TN,WM,WN,WSUBN
-warp_params := "128,128,16,4,4,64,64,8"
+warp_params := "128,128,16,8,8,64,32,4"
 
 # List all available recipes
 default:
