@@ -1,12 +1,13 @@
 #ifndef PIPELINING_KERNEL_H
 #define PIPELINING_KERNEL_H
 
-#include <cuda_pipeline.h>
+#include <cuda/pipeline>
 
 template <int BM, int BN, int BK, int WM, int WN>
 __device__ void load_tile(float *a, float *b, float (&As_stage)[BK][BM + 4],
                           float (&Bs_stage)[BK][BN], int kOffset, int by,
-                          int bx, int K, int N) {
+                          int bx, int K, int N,
+                          cuda::pipeline<cuda::thread_scope_thread> &pipe) {
   constexpr int numThreads = ((BM / WM) * (BN / WN)) * 32;
   const int linearThreadId = threadIdx.y * blockDim.x + threadIdx.x;
 
@@ -17,7 +18,7 @@ __device__ void load_tile(float *a, float *b, float (&As_stage)[BK][BM + 4],
   const int innerColB = linearThreadId % (BN / 4);
   constexpr int rowStrideB = numThreads / (BN / 4);
 
-  // Load A tile, transposing on-the-fly into As[k][m].
+  // Load A tile, transposing on-the-fly into As[k][m] via registers.
   for (int offset = 0; offset + rowStrideA <= BM; offset += rowStrideA) {
     float4 val = *reinterpret_cast<const float4 *>(
         &a[(BM * by + innerRowA + offset) * K + kOffset + innerColA * 4]);
@@ -27,10 +28,12 @@ __device__ void load_tile(float *a, float *b, float (&As_stage)[BK][BM + 4],
     As_stage[innerColA * 4 + 3][innerRowA + offset] = val.w;
   }
 
+  // Load B tile with 16-byte async copies.
   for (int offset = 0; offset + rowStrideB <= BK; offset += rowStrideB) {
-    __pipeline_memcpy_async(
+    cuda::memcpy_async(
         &Bs_stage[innerRowB + offset][innerColB * 4],
-        &b[(kOffset + innerRowB + offset) * N + BN * bx + innerColB * 4], 16);
+        &b[(kOffset + innerRowB + offset) * N + BN * bx + innerColB * 4],
+        cuda::aligned_size_t<16>(16), pipe);
   }
 }
 
@@ -79,25 +82,28 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
   float regM[TM * WMITER] = {0.0f};
   float regN[TN * WNITER] = {0.0f};
 
+  cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
+
   // Load 0th tile.
-  load_tile<BM, BN, BK, WM, WN>(a, b, As[0], Bs[0], 0, by, bx, K, N);
-  __pipeline_commit();
+  pipe.producer_acquire();
+  load_tile<BM, BN, BK, WM, WN>(a, b, As[0], Bs[0], 0, by, bx, K, N, pipe);
+  pipe.producer_commit();
 
   int compute_stage = 0;
 
   for (int i = 0; i < K; i += BK) {
     const int load_stage = compute_stage ^ 1;
 
-    // Load next tile first so we have 2 pending pipeline stages.
+    // Load next tile so we have 2 pending pipeline stages.
     if (i + BK < K) {
+      pipe.producer_acquire();
       load_tile<BM, BN, BK, WM, WN>(a, b, As[load_stage], Bs[load_stage],
-                                      i + BK, by, bx, K, N);
+                                      i + BK, by, bx, K, N, pipe);
+      pipe.producer_commit();
     }
-    __pipeline_commit();
 
     // Wait until the current compute_stage's async copies are done.
-    // With 2 pending batches, wait_prior(1) drains the older one.
-    __pipeline_wait_prior(1);
+    pipe.consumer_wait();
     __syncthreads();
 
     // Compute stage.
@@ -133,9 +139,8 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
       }
     }
 
-    // Ensure all threads finish computing before the next iteration
-    // overwrites this stage's shared memory.
     __syncthreads();
+    pipe.consumer_release();
 
     compute_stage ^= 1;
   }
