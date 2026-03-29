@@ -4,28 +4,29 @@
 #include <cuda/pipeline>
 
 template <int BM, int BN, int BK, int WM, int WN>
-__device__ void load_tile(float *a, float *b, float (&As_stage)[BK][BM + 4],
+__device__ void load_tile(float *a_t, float *b,
+                          float (&As_stage)[BK][BM + 4],
                           float (&Bs_stage)[BK][BN], int kOffset, int by,
-                          int bx, int K, int N,
+                          int bx, int M, int N,
                           cuda::pipeline<cuda::thread_scope_thread> &pipe) {
   constexpr int numThreads = ((BM / WM) * (BN / WN)) * 32;
   const int linearThreadId = threadIdx.y * blockDim.x + threadIdx.x;
 
-  const int innerRowA = linearThreadId / (BK / 4);
-  const int innerColA = linearThreadId % (BK / 4);
-  constexpr int rowStrideA = (numThreads * 4) / BK;
+  // A tile: BK rows × BM cols from K×M row-major a_t — symmetric to B.
+  const int innerRowA = linearThreadId / (BM / 4);
+  const int innerColA = linearThreadId % (BM / 4);
+  constexpr int rowStrideA = numThreads / (BM / 4);
+  // B tile: BK rows × BN cols.
   const int innerRowB = linearThreadId / (BN / 4);
   const int innerColB = linearThreadId % (BN / 4);
   constexpr int rowStrideB = numThreads / (BN / 4);
 
-  // Load A tile, transposing on-the-fly into As[k][m] via registers.
-  for (int offset = 0; offset + rowStrideA <= BM; offset += rowStrideA) {
-    float4 val = *reinterpret_cast<const float4 *>(
-        &a[(BM * by + innerRowA + offset) * K + kOffset + innerColA * 4]);
-    As_stage[innerColA * 4 + 0][innerRowA + offset] = val.x;
-    As_stage[innerColA * 4 + 1][innerRowA + offset] = val.y;
-    As_stage[innerColA * 4 + 2][innerRowA + offset] = val.z;
-    As_stage[innerColA * 4 + 3][innerRowA + offset] = val.w;
+  // Load A tile with 16-byte async copies (a_t is K×M row-major).
+  for (int offset = 0; offset + rowStrideA <= BK; offset += rowStrideA) {
+    cuda::memcpy_async(
+        &As_stage[innerRowA + offset][innerColA * 4],
+        &a_t[(kOffset + innerRowA + offset) * M + BM * by + innerColA * 4],
+        cuda::aligned_size_t<16>(16), pipe);
   }
 
   // Load B tile with 16-byte async copies.
@@ -39,13 +40,13 @@ __device__ void load_tile(float *a, float *b, float (&As_stage)[BK][BM + 4],
 
 template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
 __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
-                blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
+                blocktiling_2d_transpose_kernel(float *a_t, // A transposed: K×M row-major
                                                 float *b, float *c, int M,
                                                 int N, int K, float alpha,
                                                 float beta) {
   const int NUM_STAGES = 2;
 
-  // As stored transposed: As[k][m] — stride-1 column reads during compute
+  // As[k][m+pad]: stride-1 along m for compute; +4 padding shifts bank pattern between k-steps
   __shared__ float As[NUM_STAGES][BK][BM + 4];
   __shared__ float Bs[NUM_STAGES][BK][BN];
 
@@ -56,37 +57,28 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
 
   const int linearThreadId = ty * blockDim.x + tx;
 
-  // Warp specific calculations. Useful for warp-tiling.
   constexpr int warpSize = 32;
   const int warpId = linearThreadId / warpSize;
   const int laneId = linearThreadId % 32;
-  // How many TM x TN subtiles per thread.
   constexpr int threadTiles = (WM * WN) / (TM * TN * warpSize);
-  // WMITER and WNITER are the "dimensions" of the thread tiles.
   constexpr int WNITER = WN / (WSUBN * TN);
   constexpr int WMITER = threadTiles / WNITER;
-  // WSUBN * WSUBM == 32.
   constexpr int WSUBM = warpSize / WSUBN;
-  // This is the warpColumn and warpRow inside the block.
   const int warpRow = (warpId * WN) / BN;
   const int warpCol = warpId % (BN / WN);
-  // Thread row / column inside the warp.
   const int threadWarpCol = laneId % WSUBN;
   const int threadWarpRow = laneId / WSUBN;
 
-  // Advance c to the warp's output tile
   c += (by * BM + warpRow * WM) * N + bx * BN + warpCol * WN;
 
-  // 2D block tiling on register file.
   float threadSum[TM * TN * WNITER * WMITER] = {0.0f};
   float regM[TM * WMITER] = {0.0f};
   float regN[TN * WNITER] = {0.0f};
 
   cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
 
-  // Load 0th tile.
   pipe.producer_acquire();
-  load_tile<BM, BN, BK, WM, WN>(a, b, As[0], Bs[0], 0, by, bx, K, N, pipe);
+  load_tile<BM, BN, BK, WM, WN>(a_t, b, As[0], Bs[0], 0, by, bx, M, N, pipe);
   pipe.producer_commit();
 
   int compute_stage = 0;
@@ -94,19 +86,16 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
   for (int i = 0; i < K; i += BK) {
     const int load_stage = compute_stage ^ 1;
 
-    // Load next tile so we have 2 pending pipeline stages.
     if (i + BK < K) {
       pipe.producer_acquire();
-      load_tile<BM, BN, BK, WM, WN>(a, b, As[load_stage], Bs[load_stage],
-                                      i + BK, by, bx, K, N, pipe);
+      load_tile<BM, BN, BK, WM, WN>(a_t, b, As[load_stage], Bs[load_stage],
+                                      i + BK, by, bx, M, N, pipe);
       pipe.producer_commit();
     }
 
-    // Wait until the current compute_stage's async copies are done.
     pipe.consumer_wait();
     __syncthreads();
 
-    // Compute stage.
     for (int j = 0; j < BK; j++) {
       for (int wSubRow = 0; wSubRow < WMITER; wSubRow++) {
         for (int tid_m = 0; tid_m < TM; tid_m++) {
@@ -145,7 +134,6 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
     compute_stage ^= 1;
   }
 
-  // C = alpha * (A*B) + beta * C  — float4 stores (TN must be a multiple of 4).
   for (int wSubRow = 0; wSubRow < WMITER; wSubRow++) {
     for (int wSubCol = 0; wSubCol < WNITER; wSubCol++) {
       float *c_interim =

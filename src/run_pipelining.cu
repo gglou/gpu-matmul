@@ -2,7 +2,6 @@
 #include "kernels/pipelining_kernel.h"
 
 // ── Warp-tile config descriptor ───────────────────────────────────────────────
-// Extends TileConfig with WM, WN, WSUBN for warp-level tiling.
 template <int BM_, int BN_, int BK_, int TM_, int TN_,
           int WM_, int WN_, int WSUBN_>
 struct WarpTileConfig {
@@ -12,24 +11,21 @@ struct WarpTileConfig {
 };
 
 // ── Autotune configs ──────────────────────────────────────────────────────────
-// 2-stage pipelining with cp.async doubles shared memory:
-//   shmem = 2 * (BM*(BK+4) + BK*BN) * 4   (As has +4 padding for 16B alignment)
+// A is pre-transposed to K×M row-major so both A and B use cp.async.
+// As[BK][BM+4]: +4 pads stride for bank-conflict reduction.
+// shmem = 2 * (BK*(BM+4) + BK*BN) * 4
 //   BK=4  → ~12 KB     BK=8 → ~20 KB     BK=16 → ~36 KB
-//
-// BK=8 is the sweet spot at ~20 KB (cp.async needs +4 padding for 16B alignment).
-// BK=4 gives max occupancy but doubles K-loop iterations.
-// BK=16 is included for reference but ~33 KB will hurt occupancy hard.
 //
 // Constraints:
 //   numWarps  = (BM/WM)*(BN/WN);  numThreads = numWarps*32  <= 1024
 //   WSUBM     = 32 / WSUBN                  (must be integer)
 //   WNITER    = WN / (WSUBN * TN)            (must be integer)
 //   WMITER    = (WM*WN)/(TM*TN*32) / WNITER  (must be integer)
-//   (BM*BK) % (numThreads*4) == 0           (A loads)
+//   (BK*BM) % (numThreads*4) == 0           (A loads)
 //   (BK*BN) % (numThreads*4) == 0           (B loads)
 using AllConfigs = std::tuple<
     // ═════════════════════════════════════════════════════════════════════════
-    // BK=8  (~16 KB with 2 stages) — PRIMARY configs
+    // BK=8  (~20 KB with 2 stages) — PRIMARY configs
     // ═════════════════════════════════════════════════════════════════════════
     //                        BM   BN   BK  TM  TN   WM   WN  WSUBN    WMITER×WNITER  threads
     // ── TM=TN=4, threadTiles=4 (WM*WN=2048), 256 threads ───────────────────────────
@@ -58,7 +54,6 @@ using AllConfigs = std::tuple<
     WarpTileConfig<         128, 128,  8,  8,  8, 128,  32,   4>,  //  2×1     128
     // ═════════════════════════════════════════════════════════════════════════
     // BK=4  (~8 KB with 2 stages) — max occupancy, 2× K-loop iterations
-    // Note: BK=4 only works with 128 threads  ((128*4)/(numThreads*4) >= 1)
     // ═════════════════════════════════════════════════════════════════════════
     //                        BM   BN   BK  TM  TN   WM   WN  WSUBN    WMITER×WNITER  threads
     // ── TM=TN=4, threadTiles=8 (WM*WN=4096), 128 threads ───────────────────────────
@@ -98,9 +93,24 @@ using AllConfigs = std::tuple<
     WarpTileConfig<         128, 128, 16,  8,  8, 128,  32,   4>   //  2×1     128
 >;
 
+// ── Transpose A (M×K → K×M) using cublasSgeam ────────────────────────────────
+static float* transpose_a(float* d_a, int M, int K) {
+    float *d_a_t;
+    cudaMalloc(&d_a_t, sizeof(float) * M * K);
+    float one = 1.0f, zero = 0.0f;
+    // d_a is M×K row-major = K×M col-major (lda=K).
+    // We want d_a_t as K×M row-major = M×K col-major (ldc=M).
+    // cublasSgeam: C(m,n col-major) = alpha * op(A) + beta * op(B)
+    //   m=M, n=K, transa=T → op(A)=A^T, A is K×M col-major → A^T is M×K. ✓
+    cublasSgeam(cublasHandle(), CUBLAS_OP_T, CUBLAS_OP_N,
+                M, K, &one, d_a, K, &zero, d_a_t, M, d_a_t, M);
+    cudaDeviceSynchronize();
+    return d_a_t;
+}
+
 // ── Launcher ──────────────────────────────────────────────────────────────────
 struct Launcher {
-    float *d_a, *d_b, *d_c;
+    float *d_a_t, *d_b, *d_c;
     int M, N, K;
 
     template<int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
@@ -110,7 +120,7 @@ struct Launcher {
         dim3 threads(numThreads);
         dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
         blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>
-            <<<blocks, threads>>>(d_a, d_b, d_c, M, N, K, 1.0f, 0.0f);
+            <<<blocks, threads>>>(d_a_t, d_b, d_c, M, N, K, 1.0f, 0.0f);
     }
 };
 
@@ -125,7 +135,6 @@ template<int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN,
          typename L>
 WarpAutotuneResult bench_one_warp(const MatmulTestContext& ctx,
                                   const L& launcher, int num_runs = 50) {
-    // Warm-up
     launcher.template launch<BM, BN, BK, TM, TN, WM, WN, WSUBN>();
     cudaDeviceSynchronize();
 
@@ -153,8 +162,8 @@ WarpAutotuneResult bench_one_warp(const MatmulTestContext& ctx,
     constexpr int wniter   = WN / (WSUBN * TN);
     constexpr int wmiter   = WM / (WSUBM * TM);
     int nt    = nw * 32;
-    // 2 stages: As[2][BM][BK+4] + Bs[2][BK][BN]
-    int shmem = 2 * (BM * (BK + 4) + BK * BN) * (int)sizeof(float);
+    // 2 stages: As[2][BK][BM+4] + Bs[2][BK][BN]
+    int shmem = 2 * (BK * (BM + 4) + BK * BN) * (int)sizeof(float);
     return {BM, BN, BK, TM, TN, WM, WN, WSUBN,
             wmiter, wniter, nt, shmem, gflops, avg};
 }
@@ -176,12 +185,10 @@ void run_autotune_warp_tiled(std::tuple<Cfgs...>,
                        Cfgs::WM, Cfgs::WN, Cfgs::WSUBN>(ctx, launcher, num_runs)
     ), ...);
 
-    // Find best
     int best = 0;
     for (int i = 1; i < NC; i++)
         if (results[i].gflops > results[best].gflops) best = i;
 
-    // Print table
     std::cout << std::fixed;
     std::cout << "  #  | BK | TM | WM  | WN  | WSUBN | WMI | WNI | Thrds | Shmem  | GFLOPS  | vs cuBLAS\n";
     std::cout << " ----+----+----+-----+-----+-------+-----+-----+-------+--------+---------+----------\n";
@@ -217,16 +224,20 @@ void run_autotune_warp_tiled(std::tuple<Cfgs...>,
 
 int main(int argc, char** argv) {
     constexpr int BM = 128, BN = 128, BK = 16;
-    constexpr int TM = 4, TN = 4;
-    constexpr int WM = 128, WN = 32, WSUBN = 4;
+    constexpr int TM = 8, TN = 8;
+    constexpr int WM = 64, WN = 64, WSUBN = 4;
 
     auto ctx = setup_test("Pipelining Kernel", parse_mode(argc, argv));
 
     int M = ctx.dims.M, N = ctx.dims.N, K = ctx.dims.K;
 
+    // Pre-transpose A: M×K row-major → K×M row-major (one-time cost, not benchmarked).
+    float *d_a_t = transpose_a(ctx.d_a, M, K);
+
     if (ctx.mode == RunMode::Autotune) {
         run_autotune_warp_tiled(AllConfigs{}, ctx,
-                                Launcher{ctx.d_a, ctx.d_b, ctx.d_c, M, N, K});
+                                Launcher{d_a_t, ctx.d_b, ctx.d_c, M, N, K});
+        cudaFree(d_a_t);
         cleanup_test(ctx);
         return 0;
     }
@@ -240,11 +251,13 @@ int main(int argc, char** argv) {
     dim3 threads(numThreads);
     dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
 
-    BenchmarkResult result = run_kernel(
-        ctx, blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>,
-        "Pipelining", threads, blocks);
+    BenchmarkResult result = run_kernel_custom(ctx, "Pipelining", [&]() {
+        blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>
+            <<<blocks, threads>>>(d_a_t, ctx.d_b, ctx.d_c, M, N, K, 1.0f, 0.0f);
+    });
 
     verify_and_report(ctx, result);
+    cudaFree(d_a_t);
     cleanup_test(ctx);
     return 0;
 }
