@@ -86,10 +86,12 @@ struct Launcher {
     void launch() const {
         constexpr int numWarps   = (BM / WM) * (BN / WN);
         constexpr int numThreads = numWarps * 32;
+        constexpr int shmem_size = (BK * (BM + 4) + BK * BN) * (int)sizeof(float);
+        auto kernel = warptiling_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>;
+        cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_size);
         dim3 threads(numThreads);
         dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
-        warptiling_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>
-            <<<blocks, threads>>>(d_a, d_b, d_c, M, N, K, 1.0f, 0.0f);
+        kernel<<<blocks, threads, shmem_size>>>(d_a, d_b, d_c, M, N, K, 1.0f, 0.0f);
     }
 };
 
@@ -213,12 +215,17 @@ int main(int argc, char** argv) {
 
     constexpr int numWarps   = (BM / WM) * (BN / WN);
     constexpr int numThreads = numWarps * 32;
+    constexpr int shmem_size = (BK * (BM + 4) + BK * BN) * (int)sizeof(float);
     dim3 threads(numThreads);
     dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
 
-    BenchmarkResult result = run_kernel(
-        ctx, warptiling_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>,
-        "Warp Tiling", threads, blocks);
+    auto kernel_fn = warptiling_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>;
+    cudaFuncSetAttribute(kernel_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_size);
+
+    BenchmarkResult result = run_kernel_custom(ctx, "Warp Tiling", [&]() {
+        kernel_fn<<<blocks, threads, shmem_size>>>(
+            ctx.d_a, ctx.d_b, ctx.d_c, M, N, K, 1.0f, 0.0f);
+    });
 
     verify_and_report(ctx, result);
     cleanup_test(ctx);

@@ -62,7 +62,7 @@ ptx kernel="naive":
 run-all:
     @for k in naive coalesced shared_mem 1d_blocktiling 2d_blocktiling \
                2d_blocktiling_vectorized 2d_blocktiling_transpose \
-               warptiling pipelining; do \
+               warptiling pipelining double_buffering_pipeline; do \
         echo ""; \
         echo "══════════════════════════════════════════"; \
         echo "  Running: $k"; \
@@ -117,6 +117,7 @@ clean:
     rm -f run_naive run_coalesced run_shared_mem run_1d_blocktiling \
           run_2d_blocktiling run_2d_blocktiling_vectorized \
           run_2d_blocktiling_transpose \
-          run_warptiling run_pipelining run_ping_pong_pipeline \
+          run_warptiling run_pipelining run_double_buffering_pipeline \
+          run_ping_pong_pipeline \
           run_reference_warptiling run_cublas
     rm -rf inspect profiler/output

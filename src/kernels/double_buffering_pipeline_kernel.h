@@ -1,27 +1,15 @@
-#ifndef WARP_TILING_KERNEL_H
-#define WARP_TILING_KERNEL_H
+#ifndef DOUBLE_BUFFERING_PIPELINE_KERNEL_H
+#define DOUBLE_BUFFERING_PIPELINE_KERNEL_H
 
-template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
-__global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
-                warptiling_kernel(float *a, // A: M×K row-major
-                                                float *b, float *c, int M,
-                                                int N, int K, float alpha,
-                                                float beta) {
-  extern __shared__ __align__(16) char smem[];
-  using As_t = float[BK][BM + 4];
-  using Bs_t = float[BK][BN];
-  auto &As = *reinterpret_cast<As_t *>(smem);
-  auto &Bs = *reinterpret_cast<Bs_t *>(smem + sizeof(As_t));
-  // thread "coordinates"
-  const int tx = threadIdx.x;
-  const int ty = threadIdx.y;
+#include <cuda/pipeline>
 
-  // block "coordinates"
-  const int bx = blockIdx.x;
-  const int by = blockIdx.y;
-
+template <int BM, int BN, int BK, int WM, int WN>
+__device__ void load_tile(float *a, float *b, float (&As_stage)[BK][BM + 4],
+                          float (&Bs_stage)[BK][BN], int kOffset, int by,
+                          int bx, int K, int N,
+                          cuda::pipeline<cuda::thread_scope_thread> &pipe) {
   constexpr int numThreads = ((BM / WM) * (BN / WN)) * 32;
-  const int linearThreadId = ty * blockDim.x + tx;
+  const int linearThreadId = threadIdx.y * blockDim.x + threadIdx.x;
 
   const int innerRowA = linearThreadId / (BK / 4);
   const int innerColA = linearThreadId % (BK / 4);
@@ -29,6 +17,48 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
   const int innerRowB = linearThreadId / (BN / 4);
   const int innerColB = linearThreadId % (BN / 4);
   constexpr int rowStrideB = numThreads / (BN / 4);
+
+  // Load A tile, transposing on-the-fly into As[k][m] via registers.
+  for (int offset = 0; offset + rowStrideA <= BM; offset += rowStrideA) {
+    float4 val = *reinterpret_cast<const float4 *>(
+        &a[(BM * by + innerRowA + offset) * K + kOffset + innerColA * 4]);
+    As_stage[innerColA * 4 + 0][innerRowA + offset] = val.x;
+    As_stage[innerColA * 4 + 1][innerRowA + offset] = val.y;
+    As_stage[innerColA * 4 + 2][innerRowA + offset] = val.z;
+    As_stage[innerColA * 4 + 3][innerRowA + offset] = val.w;
+  }
+
+  // Load B tile with 16-byte async copies.
+  for (int offset = 0; offset + rowStrideB <= BK; offset += rowStrideB) {
+    cuda::memcpy_async(
+        &Bs_stage[innerRowB + offset][innerColB * 4],
+        &b[(kOffset + innerRowB + offset) * N + BN * bx + innerColB * 4],
+        cuda::aligned_size_t<16>(16), pipe);
+  }
+}
+
+template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
+__global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
+                blocktiling_2d_transpose_kernel(float *a, // A: M×K row-major
+                                                float *b, float *c, int M,
+                                                int N, int K, float alpha,
+                                                float beta) {
+  constexpr int NUM_STAGES = 2;
+
+  // Dynamic shared memory — layout: As[2][BK][BM+4] then Bs[2][BK][BN]
+  // As stored transposed: As[k][m] — stride-1 column reads during compute
+  extern __shared__ __align__(16) char smem[];
+  using As_t = float[BK][BM + 4];
+  using Bs_t = float[BK][BN];
+  auto As = reinterpret_cast<As_t *>(smem);
+  auto Bs = reinterpret_cast<Bs_t *>(smem + NUM_STAGES * sizeof(As_t));
+
+  const int tx = threadIdx.x;
+  const int ty = threadIdx.y;
+  const int bx = blockIdx.x;
+  const int by = blockIdx.y;
+
+  const int linearThreadId = ty * blockDim.x + tx;
 
   // Warp specific calculations. Useful for warp-tiling.
   constexpr int warpSize = 32;
@@ -45,8 +75,6 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
   const int warpRow = (warpId * WN) / BN;
   const int warpCol = warpId % (BN / WN);
   // Thread row / column inside the warp.
-  // Reminder: WSUBN is the how many threads are on the N dimension
-  // of the warp tile.
   const int threadWarpCol = laneId % WSUBN;
   const int threadWarpRow = laneId / WSUBN;
 
@@ -58,46 +86,45 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
   float regM[TM * WMITER] = {0.0f};
   float regN[TN * WNITER] = {0.0f};
 
+  cuda::pipeline<cuda::thread_scope_thread> pipe = cuda::make_pipeline();
+
+  // Load 0th tile.
+  pipe.producer_acquire();
+  load_tile<BM, BN, BK, WM, WN>(a, b, As[0], Bs[0], 0, by, bx, K, N, pipe);
+  pipe.producer_commit();
+
+  int compute_stage = 0;
+
   for (int i = 0; i < K; i += BK) {
+    const int load_stage = compute_stage ^ 1;
 
-    // Load A tile, transposing on-the-fly into As[k][m].
-    for (int offset = 0; offset + rowStrideA <= BM; offset += rowStrideA) {
-      float4 val = *reinterpret_cast<const float4 *>(
-          &a[(BM * by + innerRowA + offset) * K + i + innerColA * 4]);
-      As[innerColA * 4 + 0][innerRowA + offset] = val.x;
-      As[innerColA * 4 + 1][innerRowA + offset] = val.y;
-      As[innerColA * 4 + 2][innerRowA + offset] = val.z;
-      As[innerColA * 4 + 3][innerRowA + offset] = val.w;
+    // Load next tile so we have 2 pending pipeline stages.
+    if (i + BK < K) {
+      pipe.producer_acquire();
+      load_tile<BM, BN, BK, WM, WN>(a, b, As[load_stage], Bs[load_stage],
+                                      i + BK, by, bx, K, N, pipe);
+      pipe.producer_commit();
     }
 
-    // Load Bs from B (row-major, coalesced).
-    for (int offset = 0; offset + rowStrideB <= BK; offset += rowStrideB) {
-      *reinterpret_cast<float4 *>(&Bs[innerRowB + offset][innerColB * 4]) =
-          *reinterpret_cast<const float4 *>(
-              &b[(i + innerRowB + offset) * N + BN * bx + innerColB * 4]);
-    }
-
+    // Wait until the current compute_stage's async copies are done.
+    pipe.consumer_wait();
     __syncthreads();
 
+    // Compute stage.
     for (int j = 0; j < BK; j++) {
       for (int wSubRow = 0; wSubRow < WMITER; wSubRow++) {
         for (int tid_m = 0; tid_m < TM; tid_m++) {
-          // warpRow * WM to go to the correct warp starting row of the warp
-          // tile. wSubRow * WSUBM * TM to go to the correct "row" of the
-          // (WMITER * TM) x (WNITER * TN) tile. threadWarpRow * TM + tid_in to
-          // go to the correct value for the TM x TN tile
           const int aRow =
               warpRow * WM + wSubRow * WSUBM * TM + threadWarpRow * TM + tid_m;
-          regM[wSubRow * TM + tid_m] = As[j][aRow];
+          regM[wSubRow * TM + tid_m] = As[compute_stage][j][aRow];
         }
       }
 
       for (int wSubCol = 0; wSubCol < WNITER; wSubCol++) {
         for (int tid_n = 0; tid_n < TN; tid_n++) {
-          // Similar logic to above.
           const int bCol =
               warpCol * WN + wSubCol * WSUBN * TN + threadWarpCol * TN + tid_n;
-          regN[wSubCol * TN + tid_n] = Bs[j][bCol];
+          regN[wSubCol * TN + tid_n] = Bs[compute_stage][j][bCol];
         }
       }
 
@@ -107,10 +134,6 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
             for (int tid_n = 0; tid_n < TN; tid_n++) {
               const int regMIdx = wSubRow * TM + tid_m;
               const int regNIdx = wSubCol * TN + tid_n;
-              // wSubRow * TM + tid_m -- row
-              // wSubCol * TN + tid_n -- column
-              // threadResults has a WMITER * TM x WNITER * WN shape.
-              // (Compared to the TM x TN shape that it used to have).
               const int resIdx =
                   (wSubRow * TM + tid_m) * (WNITER * TN) + wSubCol * TN + tid_n;
               threadSum[resIdx] += regM[regMIdx] * regN[regNIdx];
@@ -119,7 +142,11 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
         }
       }
     }
+
     __syncthreads();
+    pipe.consumer_release();
+
+    compute_stage ^= 1;
   }
 
   // C = alpha * (A*B) + beta * C  — float4 stores (TN must be a multiple of 4).
@@ -151,4 +178,4 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
   }
 }
 
-#endif // WARP_TILING_KERNEL_H
+#endif // DOUBLE_BUFFERING_PIPELINE_KERNEL_H
