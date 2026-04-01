@@ -13,8 +13,6 @@ includes := "-I./src"
 opt      := "-O3"
 shared   := src / "benchmark.cu" + " " + src / "utils.cu" + " " + kernels / "cublas_matmul.cu"
 
-# Default warp-tiling template params: BM,BN,BK,TM,TN,WM,WN,WSUBN
-warp_params := "128,128,16,8,8,64,32,4"
 
 # List all available recipes
 default:
@@ -36,9 +34,10 @@ build kernel="naive":
 run kernel="naive": (build kernel)
     ./run_{{kernel}}
 
-# Build + autotune a kernel          (e.g. just autotune reduce_shared_memory_banks)
-autotune kernel: (build kernel)
-    ./run_{{kernel}} --autotune
+# Build + autotune a kernel          (e.g. just autotune warptiling)
+autotune kernel:
+    nvcc {{opt}} {{includes}} -arch=sm_{{sm}} {{src}}/autotune/run_{{kernel}}_autotune.cu {{shared}} {{libs}} -o run_{{kernel}}_autotune
+    ./run_{{kernel}}_autotune
 
 # Build + ncu profile                (e.g. just profile naive)
 profile kernel="naive": (build kernel)
@@ -62,7 +61,7 @@ ptx kernel="naive":
 run-all:
     @for k in naive coalesced shared_mem 1d_blocktiling 2d_blocktiling \
                2d_blocktiling_vectorized 2d_blocktiling_transpose \
-               warptiling pipelining double_buffering_pipeline; do \
+               warptiling pipelining double_buffering_pipeline ping_pong_pipeline; do \
         echo ""; \
         echo "══════════════════════════════════════════"; \
         echo "  Running: $k"; \
@@ -93,22 +92,9 @@ plot-csv csv_path:
     python3 profiler/ncu_dashboard.py --csv {{csv_path}}
 
 # SASS assembly analysis report       (e.g. just sass-report warptiling)
-sass-report kernel="naive" params=warp_params: (build kernel)
+sass-report kernel="naive": (build kernel)
     python3 profiler/sass_report.py ./run_{{kernel}} \
-        --params {{params}} \
         -o profiler/output/{{kernel}}_sass.png
-
-# SASS overview (all template instantiations)  (e.g. just sass-overview warptiling)
-sass-overview kernel="naive": (build kernel)
-    python3 profiler/sass_report.py ./run_{{kernel}} --overview \
-        -o profiler/output/{{kernel}}_sass_overview.png
-
-# SASS comparison of two kernels     (e.g. just sass-compare warptiling reference_warptiling)
-sass-compare kernel1 kernel2 params=warp_params: (build kernel1) (build kernel2)
-    python3 profiler/sass_report.py ./run_{{kernel1}} \
-        --compare ./run_{{kernel2}} \
-        --params {{params}} \
-        -o profiler/output/{{kernel1}}_vs_{{kernel2}}_sass.png
 
 # ── Utility ───────────────────────────────────────────────────────────────────
 
@@ -117,7 +103,11 @@ clean:
     rm -f run_naive run_coalesced run_shared_mem run_1d_blocktiling \
           run_2d_blocktiling run_2d_blocktiling_vectorized \
           run_2d_blocktiling_transpose \
-          run_warptiling run_pipelining run_double_buffering_pipeline \
-          run_ping_pong_pipeline \
+          run_2d_blocktiling_autotune run_2d_blocktiling_vectorized_autotune \
+          run_2d_blocktiling_transpose_autotune \
+          run_warptiling run_warptiling_autotune \
+          run_pipelining run_pipelining_autotune \
+          run_double_buffering_pipeline run_double_buffering_pipeline_autotune \
+          run_ping_pong_pipeline run_ping_pong_pipeline_autotune \
           run_reference_warptiling run_cublas
     rm -rf inspect profiler/output

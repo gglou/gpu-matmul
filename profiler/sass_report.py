@@ -10,24 +10,15 @@ Extracts the native GPU assembly (SASS) from a compiled binary using
   ③ Loop detection (back-edge branches → unrolled vs. looped code)
   ④ Compute density & FFMA efficiency
   ⑤ Register and shared-memory usage
-  ⑥ Comparison mode: diff two binaries side-by-side
 
 This directly answers the question "did constexpr / template parameters
 help the compiler unroll my loops?" — fewer back-edge branches and more
 straight-line FFMA sequences = better unrolling.
 
 Usage:
-    # Via Justfile (recommended):
     just sass-report warptiling
-    just sass-report warptiling --filter "Li64ELi64ELi8E"
-
-    # Direct invocation:
     python3 profiler/sass_report.py ./run_warptiling
     python3 profiler/sass_report.py ./run_warptiling -o profiler/output/warptiling_sass.png
-    python3 profiler/sass_report.py ./run_warptiling --filter "Li64ELi64ELi8E"
-
-    # Compare two binaries (e.g. your kernel vs reference):
-    python3 profiler/sass_report.py ./run_warptiling --compare ./run_reference_warptiling
 
 Requires: matplotlib numpy
     pip install matplotlib numpy
@@ -108,14 +99,11 @@ for cat, opcodes in OPCODE_CATEGORIES.items():
 
 def classify_opcode(opcode: str) -> str:
     """Map a SASS opcode to a broad category."""
-    # Exact match first
     if opcode in _OPCODE_TO_CAT:
         return _OPCODE_TO_CAT[opcode]
-    # Try stripping modifiers (e.g. "ISETP.LE.AND" → "ISETP")
     base = opcode.split(".")[0]
     if base in _OPCODE_TO_CAT:
         return _OPCODE_TO_CAT[base]
-    # Prefix match for modifiers we haven't explicitly listed
     for cat, opcodes in OPCODE_CATEGORIES.items():
         for op in opcodes:
             if opcode.startswith(op):
@@ -146,7 +134,6 @@ def _group_counts(detail: dict[str, int]) -> dict[str, int]:
         total = sum(detail.get(c, 0) for c in cats)
         if total > 0:
             result[group] = total
-    # Catch unknowns
     unk = detail.get("Unknown", 0)
     if unk > 0:
         result["Unknown"] = unk
@@ -227,15 +214,12 @@ class KernelSASS:
     def short_name(self) -> str:
         """A readable short name derived from the demangled name."""
         name = self.demangled_name
-        # Extract template params if present
         m = re.search(r"(\w+)<(.+?)>", name)
         if m:
             func = m.group(1)
             params = m.group(2)
-            # Just keep numeric params
             nums = re.findall(r"\d+", params)
             return f"{func}<{','.join(nums)}>"
-        # fallback: just function name
         m = re.match(r"[\w:]+?(\w+)\(", name)
         if m:
             return m.group(1)
@@ -322,7 +306,6 @@ def parse_sass(sass_text: str, resource_map: dict[str, dict[str, int]] | None = 
         demangled = _demangle(mangled)
         i += 1
 
-        # Collect all instructions until next Function or end
         instructions: list[tuple[int, str]] = []
         opcode_counts: Counter = Counter()
         branches: list[BranchInfo] = []
@@ -339,14 +322,12 @@ def parse_sass(sass_text: str, resource_map: dict[str, dict[str, int]] | None = 
             addr = int(im.group(1), 16)
             opcode = im.group(3)
 
-            # Skip the control-word lines (they have hex data but no real opcode)
             if opcode.startswith("0x") or opcode.startswith("/*"):
                 continue
 
             instructions.append((addr, opcode))
             opcode_counts[opcode] += 1
 
-            # Check for branch
             bm = bra_re.search(line)
             if bm:
                 src = int(bm.group(1), 16)
@@ -357,16 +338,14 @@ def parse_sass(sass_text: str, resource_map: dict[str, dict[str, int]] | None = 
                     is_back_edge=(dst <= src),
                 ))
 
-        # Build category counts
         category_counts: dict[str, int] = {}
         for op, count in opcode_counts.items():
             cat = classify_opcode(op)
             category_counts[cat] = category_counts.get(cat, 0) + count
 
-        # Resource usage
         res = resource_map.get(mangled, {})
 
-        k = KernelSASS(
+        kernels.append(KernelSASS(
             mangled_name=mangled,
             demangled_name=demangled,
             instructions=instructions,
@@ -378,23 +357,23 @@ def parse_sass(sass_text: str, resource_map: dict[str, dict[str, int]] | None = 
             shared_mem=res.get("shared_mem", 0),
             local_mem=res.get("local_mem", 0),
             constant_mem=res.get("constant_mem", 0),
-        )
-        kernels.append(k)
+        ))
 
     return kernels
 
 
-def load_kernels(binary: str, kernel_filter: str | None = None) -> list[KernelSASS]:
-    """Full pipeline: extract SASS + resources, parse, optionally filter."""
+def load_kernel(binary: str) -> KernelSASS:
+    """Full pipeline: extract SASS + resources, parse, return the first kernel."""
     sass_text = extract_sass(binary)
     resource_map = extract_resource_usage(binary)
     kernels = parse_sass(sass_text, resource_map)
-    if kernel_filter:
-        kernels = [k for k in kernels if kernel_filter in k.mangled_name
-                   or kernel_filter in k.demangled_name
-                   or kernel_filter in k.short_name]
-    print(f"   Found {len(kernels)} kernel(s)", file=sys.stderr)
-    return kernels
+    if not kernels:
+        print("ERROR — no kernels found in binary.", file=sys.stderr)
+        sys.exit(1)
+    if len(kernels) > 1:
+        print(f"   {len(kernels)} kernels found — using first: {kernels[0].short_name}",
+              file=sys.stderr)
+    return kernels[0]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -413,14 +392,11 @@ C_PURPLE  = "#6A1B9A"
 C_LPURPLE = "#AB47BC"
 C_GRAY    = "#757575"
 C_LGRAY   = "#BDBDBD"
-C_PINK    = "#D81B60"
-C_TEAL    = "#00897B"
-C_DBLUE   = "#0D47A1"
 
 GROUP_COLORS = {
     "FP32 Compute":  C_BLUE,
     "FP16 / BF16":   C_CYAN,
-    "FP64":          C_DBLUE,
+    "FP64":          "#0D47A1",
     "Tensor Core":   C_GREEN,
     "Integer":       C_RED,
     "Data Movement": C_AMBER,
@@ -503,7 +479,7 @@ def plot_instruction_mix_bar(ax: plt.Axes, kernel: KernelSASS):
         ax.set_title("② Instruction Mix (Detailed)", fontweight="bold", fontsize=10)
         return
 
-    labels, values = zip(*reversed(cats))  # reversed so largest at top
+    labels, values = zip(*reversed(cats))
     n = len(values)
     cmap = plt.cm.tab20(np.linspace(0, 1, max(n, 2)))
     bars = ax.barh(labels, values, color=cmap[:n], height=0.7,
@@ -558,9 +534,7 @@ def plot_top_opcodes(ax: plt.Axes, kernel: KernelSASS, top_n: int = 15):
         return
 
     opcodes, counts = zip(*reversed(most_common))
-    n = len(counts)
 
-    # Colour by category
     cat_colors = {
         "FP32 FMA": C_BLUE, "FP32 Mul": C_LBLUE, "FP32 Add": C_CYAN,
         "Load Global": C_ORANGE, "Store Global": C_RED,
@@ -590,11 +564,9 @@ def plot_loop_analysis(ax: plt.Axes, kernel: KernelSASS):
                 transform=ax.transAxes, fontsize=10, color=C_GRAY)
         return
 
-    # Build instruction address → position mapping
     addrs = [a for a, _ in kernel.instructions]
     max_addr = max(addrs) if addrs else 1
 
-    # Plot instruction density heatmap (group into 64-byte buckets)
     bucket_size = 0x40  # 64 bytes = 4 instructions
     n_buckets = (max_addr // bucket_size) + 1
     density = np.zeros(n_buckets)
@@ -616,7 +588,6 @@ def plot_loop_analysis(ax: plt.Axes, kernel: KernelSASS):
     ax.fill_between(x, mem_density, alpha=0.5, color=C_GREEN, label="Memory", step="mid")
     ax.plot(x, density, color=C_GRAY, alpha=0.4, lw=0.5, label="All")
 
-    # Mark back-edge branches (loops) with red arrows
     for br in kernel.branches:
         if br.is_back_edge:
             src_bucket = br.src_addr // bucket_size
@@ -632,9 +603,6 @@ def plot_loop_analysis(ax: plt.Axes, kernel: KernelSASS):
     ax.set_ylabel("Instructions per bucket")
     ax.legend(fontsize=7, loc="upper right")
 
-    # Annotation about loop structure
-    n_loops = kernel.num_back_edges
-    # Don't count the self-loop at EXIT (BRA $self) — that's an infinite wait, not a real loop
     real_loops = sum(1 for b in kernel.branches
                      if b.is_back_edge and b.src_addr != b.dst_addr)
     note = (f"{real_loops} loop back-edge(s) detected"
@@ -646,7 +614,7 @@ def plot_loop_analysis(ax: plt.Axes, kernel: KernelSASS):
             bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=C_LGRAY, alpha=0.9))
 
 
-# ── Panel 6: Efficiency metrics / comparison ─────────────────────────────────
+# ── Panel 6: Efficiency metrics ──────────────────────────────────────────────
 
 def plot_efficiency(ax: plt.Axes, kernel: KernelSASS):
     """Bar chart of key efficiency ratios."""
@@ -683,10 +651,10 @@ def plot_efficiency(ax: plt.Axes, kernel: KernelSASS):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Dashboard assembly — single kernel
+# Dashboard assembly
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_single_dashboard(kernel: KernelSASS, title: str, output: str):
+def build_dashboard(kernel: KernelSASS, title: str, output: str):
     """6-panel SASS analysis dashboard for one kernel."""
     fig = plt.figure(figsize=(20, 15))
     fig.suptitle(f"SASS Assembly Report  —  {title}",
@@ -710,232 +678,26 @@ def build_single_dashboard(kernel: KernelSASS, title: str, output: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Dashboard assembly — comparison mode
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def build_comparison_dashboard(k1: KernelSASS, k2: KernelSASS,
-                                label1: str, label2: str, output: str):
-    """Side-by-side comparison of two kernels' SASS."""
-    fig = plt.figure(figsize=(22, 18))
-    fig.suptitle(f"SASS Comparison  —  {label1}  vs  {label2}",
-                 fontsize=14, fontweight="bold", y=0.985)
-    fig.text(0.99, 0.005, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-             fontsize=7, color="#999999", ha="right", va="bottom",
-             fontfamily="monospace")
-
-    gs = gridspec.GridSpec(4, 2, figure=fig, hspace=0.50, wspace=0.40,
-                           top=0.95, bottom=0.03, left=0.08, right=0.96)
-
-    # Row 0: summary tables
-    plot_summary_table(fig.add_subplot(gs[0, 0]), k1)
-    plot_summary_table(fig.add_subplot(gs[0, 1]), k2)
-
-    # Row 1: instruction mix comparison (grouped bar)
-    ax_mix = fig.add_subplot(gs[1, :])
-    _plot_comparison_bars(ax_mix, k1, k2, label1, label2)
-
-    # Row 2: loop analysis side by side
-    plot_loop_analysis(fig.add_subplot(gs[2, 0]), k1)
-    plot_loop_analysis(fig.add_subplot(gs[2, 1]), k2)
-
-    # Row 3: efficiency side by side
-    plot_efficiency(fig.add_subplot(gs[3, 0]), k1)
-    plot_efficiency(fig.add_subplot(gs[3, 1]), k2)
-
-    plt.savefig(output, bbox_inches="tight", dpi=150)
-    print(f"✓  Saved: {output}", file=sys.stderr)
-
-
-def _plot_comparison_bars(ax: plt.Axes, k1: KernelSASS, k2: KernelSASS,
-                           label1: str, label2: str):
-    """Grouped bar chart comparing instruction categories between two kernels."""
-    all_cats = list(SUMMARY_GROUPS.keys())
-    g1 = _group_counts(k1.category_counts)
-    g2 = _group_counts(k2.category_counts)
-
-    cats = [c for c in all_cats if g1.get(c, 0) > 0 or g2.get(c, 0) > 0]
-    v1 = [g1.get(c, 0) for c in cats]
-    v2 = [g2.get(c, 0) for c in cats]
-
-    x = np.arange(len(cats))
-    w = 0.35
-    bars1 = ax.bar(x - w/2, v1, w, label=label1, color=C_BLUE, edgecolor="white")
-    bars2 = ax.bar(x + w/2, v2, w, label=label2, color=C_RED, edgecolor="white")
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(cats, fontsize=8, rotation=25, ha="right")
-    ax.set_ylabel("Instruction Count")
-    ax.set_title("Instruction Group Comparison", fontweight="bold", fontsize=10)
-    ax.legend(fontsize=8)
-
-    # Annotate bars with counts
-    for bar, val in zip(bars1, v1):
-        if val > 0:
-            ax.text(bar.get_x() + bar.get_width()/2, val + max(max(v1), max(v2)) * 0.01,
-                    f"{val:,}", ha="center", fontsize=6, color=C_BLUE)
-    for bar, val in zip(bars2, v2):
-        if val > 0:
-            ax.text(bar.get_x() + bar.get_width()/2, val + max(max(v1), max(v2)) * 0.01,
-                    f"{val:,}", ha="center", fontsize=6, color=C_RED)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Multi-kernel overview (e.g. for autotuned binaries with many instantiations)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def build_overview_dashboard(kernels: list[KernelSASS], title: str, output: str):
-    """Tabular overview of all kernel instantiations in one binary."""
-    fig, axes = plt.subplots(2, 1, figsize=(20, 10),
-                              gridspec_kw={"height_ratios": [1, 1], "hspace": 0.45})
-    fig.suptitle(f"SASS Overview  —  {title}  ({len(kernels)} kernels)",
-                 fontsize=14, fontweight="bold", y=0.98)
-    fig.text(0.99, 0.005, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-             fontsize=7, color="#999999", ha="right", va="bottom",
-             fontfamily="monospace")
-
-    # Sort by total instruction count
-    kernels_sorted = sorted(kernels, key=lambda k: k.total_instructions)
-
-    # Panel 1: instruction count bars
-    ax = axes[0]
-    names = [k.short_name for k in kernels_sorted]
-    counts = [k.total_instructions for k in kernels_sorted]
-    ffma_cts = [k.ffma_count for k in kernels_sorted]
-    regs = [k.registers for k in kernels_sorted]
-    loops = [k.num_back_edges for k in kernels_sorted]
-
-    y = np.arange(len(names))
-    bars_total = ax.barh(y, counts, color=C_LGRAY, height=0.6, label="Total", edgecolor="white")
-    bars_ffma = ax.barh(y, ffma_cts, color=C_BLUE, height=0.6, label="FFMA", edgecolor="white")
-    ax.set_yticks(y)
-    ax.set_yticklabels(names, fontsize=6, fontfamily="monospace")
-    ax.set_xlabel("Instruction Count")
-    ax.set_title("Instruction Count per Kernel", fontweight="bold", fontsize=10)
-    ax.legend(fontsize=7, loc="lower right")
-
-    # Annotate with register count and loop info
-    for i, (total, reg, lp) in enumerate(zip(counts, regs, loops)):
-        label = f"  {total:,} inst  |  {reg} regs"
-        if lp > 1:
-            label += f"  |  {lp} loops ⚠"
-        ax.text(total + max(counts) * 0.01, i, label,
-                va="center", fontsize=6, fontfamily="monospace")
-
-    # Panel 2: compute density comparison
-    ax2 = axes[1]
-    densities = [100 * k.compute_density for k in kernels_sorted]
-    mem_pcts = [100 * k.memory_count / max(k.total_instructions, 1) for k in kernels_sorted]
-
-    bars_d = ax2.barh(y, densities, color=C_BLUE, height=0.4, label="FFMA Density %",
-                      edgecolor="white")
-    bars_m = ax2.barh(y + 0.4, mem_pcts, color=C_GREEN, height=0.4,
-                      label="Memory %", edgecolor="white")
-    ax2.set_yticks(y + 0.2)
-    ax2.set_yticklabels(names, fontsize=6, fontfamily="monospace")
-    ax2.set_xlabel("% of Total Instructions")
-    ax2.set_xlim(0, 100)
-    ax2.set_title("Compute Density & Memory Ratio", fontweight="bold", fontsize=10)
-    ax2.legend(fontsize=7, loc="lower right")
-
-    plt.savefig(output, bbox_inches="tight", dpi=150)
-    print(f"✓  Saved: {output}", file=sys.stderr)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # CLI
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def params_to_filter(params: str) -> str:
-    """Convert human-readable template params to a mangled-name filter.
-
-    Example: "128,128,16,4,4,64,64,8" → "Li128ELi128ELi16ELi4ELi4ELi64ELi64ELi8E"
-    """
-    nums = [n.strip() for n in params.split(",")]
-    return "".join(f"Li{n}E" for n in nums)
-
 
 def main():
     parser = argparse.ArgumentParser(
         description="SASS assembly analysis dashboard for GPU kernels",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Analyse a specific template instantiation (human-readable params):
-  python3 profiler/sass_report.py ./run_warptiling --params 128,128,16,4,4,64,64,8
-
-  # Overview of all template instantiations:
-  python3 profiler/sass_report.py ./run_warptiling --overview
-
-  # Compare your kernel vs reference:
-  python3 profiler/sass_report.py ./run_warptiling --compare ./run_reference_warptiling \\
-      --params 128,128,16,4,4,64,64,8
-        """,
+        epilog="Example: python3 profiler/sass_report.py ./run_warptiling",
     )
     parser.add_argument("binary", help="Compiled CUDA binary to analyse")
     parser.add_argument("-o", "--output", default=None,
                         help="Output image path (default: profiler/output/<name>_sass.png)")
-    parser.add_argument("--params", default=None,
-                        help="Template params as comma-separated integers "
-                             "(e.g. '128,128,16,4,4,64,64,8' for BM,BN,BK,TM,TN,WM,WN,WSUBN)")
-    parser.add_argument("--filter", default=None,
-                        help="Substring to match kernel names (raw mangled-name filter)")
-    parser.add_argument("--compare", default=None,
-                        help="Second binary to compare against")
-    parser.add_argument("--overview", action="store_true",
-                        help="Show overview of ALL kernels in the binary")
-    parser.add_argument("--sass-file", default=None,
-                        help="Read SASS from file instead of running cuobjdump")
     args = parser.parse_args()
 
-    # --params takes priority: convert to a mangled-name filter
-    if args.params:
-        args.filter = params_to_filter(args.params)
-
     name = Path(args.binary).stem.removeprefix("run_")
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    if args.sass_file:
-        sass_text = Path(args.sass_file).read_text()
-        resource_map = extract_resource_usage(args.binary)
-        kernels = parse_sass(sass_text, resource_map)
-        if args.filter:
-            kernels = [k for k in kernels if args.filter in k.mangled_name
-                       or args.filter in k.demangled_name]
-        print(f"   Loaded {len(kernels)} kernel(s) from {args.sass_file}", file=sys.stderr)
-    else:
-        kernels = load_kernels(args.binary, args.filter)
-
-    if not kernels:
-        print("ERROR — no kernels found (check --filter).", file=sys.stderr)
-        sys.exit(1)
+    kernel = load_kernel(args.binary)
 
     out_dir = Path("profiler/output")
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    if args.compare:
-        # Comparison mode
-        kernels2 = load_kernels(args.compare, args.filter)
-        if not kernels2:
-            print("ERROR — no kernels in comparison binary.", file=sys.stderr)
-            sys.exit(1)
-        name2 = Path(args.compare).stem.removeprefix("run_")
-        out = args.output or str(out_dir / f"{name}_vs_{name2}_sass_{ts}.png")
-        build_comparison_dashboard(kernels[0], kernels2[0], name, name2, out)
-
-    elif args.overview:
-        # Overview mode
-        out = args.output or str(out_dir / f"{name}_sass_overview_{ts}.png")
-        build_overview_dashboard(kernels, name, out)
-
-    else:
-        # Single kernel deep-dive (default: first matching)
-        if len(kernels) > 1:
-            print(f"   Multiple kernels found — using first match: {kernels[0].short_name}",
-                  file=sys.stderr)
-            print(f"   Use --overview to see all, or --filter to narrow down.",
-                  file=sys.stderr)
-        out = args.output or str(out_dir / f"{name}_sass_{ts}.png")
-        build_single_dashboard(kernels[0], name, out)
+    out = args.output or str(out_dir / f"{name}_sass.png")
+    build_dashboard(kernel, name, out)
 
 
 if __name__ == "__main__":

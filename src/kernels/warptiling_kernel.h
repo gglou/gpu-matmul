@@ -7,11 +7,17 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
                                                 float *b, float *c, int M,
                                                 int N, int K, float alpha,
                                                 float beta) {
-  extern __shared__ __align__(16) char smem[];
-  using As_t = float[BK][BM + 4];
-  using Bs_t = float[BK][BN];
-  auto &As = *reinterpret_cast<As_t *>(smem);
-  auto &Bs = *reinterpret_cast<Bs_t *>(smem + sizeof(As_t));
+
+//   extern __shared__ __align__(16) char smem[];
+//   using As_t = float[BK][BM + 4];
+//   using Bs_t = float[BK][BN];
+//   // Shared memory layout: first As, then Bs, all within a single dynamic allocation
+//   auto &As = *reinterpret_cast<As_t *>(smem);
+//   auto &Bs = *reinterpret_cast<Bs_t *>(smem + sizeof(As_t));
+
+  __shared__ float As[BK][BM + 4];
+  __shared__ float Bs[BK][BN];
+
   // thread "coordinates"
   const int tx = threadIdx.x;
   const int ty = threadIdx.y;
