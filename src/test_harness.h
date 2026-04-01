@@ -286,4 +286,124 @@ void run_autotune_tiled(std::tuple<Cfgs...>, const MatmulTestContext& ctx,
               << std::setprecision(2) << (b.gflops / cublas_gflops) << "x cuBLAS)\n";
 }
 
+// ============================================================================
+// Warp-tiling autotune infrastructure
+// ============================================================================
+
+// Extends TileConfig with WM, WN, WSUBN for warp-level tiling.
+template <int BM_, int BN_, int BK_, int TM_, int TN_,
+          int WM_, int WN_, int WSUBN_>
+struct WarpTileConfig {
+    static constexpr int BM = BM_, BN = BN_, BK = BK_;
+    static constexpr int TM = TM_, TN = TN_;
+    static constexpr int WM = WM_, WN = WN_, WSUBN = WSUBN_;
+};
+
+struct WarpAutotuneResult {
+    int BM, BN, BK, TM, TN, WM, WN, WSUBN;
+    int WMITER, WNITER, numThreads;
+    double gflops, min_ms;
+};
+
+template<int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN,
+         typename L>
+WarpAutotuneResult bench_one_warp(const MatmulTestContext& ctx,
+                                  const L& launcher, int num_runs = 50) {
+    constexpr int nw     = (BM / WM) * (BN / WN);
+    constexpr int WSUBM  = 32 / WSUBN;
+    constexpr int wniter = WN / (WSUBN * TN);
+    constexpr int wmiter = WM / (WSUBM * TM);
+    int nt = nw * 32;
+
+    launcher.template launch<BM, BN, BK, TM, TN, WM, WN, WSUBN>();
+    cudaError_t err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        std::cerr << "  ✗ Launch failed (BM=" << BM << " BN=" << BN
+                  << " BK=" << BK << " TM=" << TM << " TN=" << TN
+                  << " WM=" << WM << " WN=" << WN << " WSUBN=" << WSUBN
+                  << "): " << cudaGetErrorString(err) << "\n";
+        return {BM, BN, BK, TM, TN, WM, WN, WSUBN, wmiter, wniter, nt, 0.0, 0.0};
+    }
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    float mn = 1e9f;
+    for (int r = 0; r < num_runs; r++) {
+        cudaEventRecord(start);
+        launcher.template launch<BM, BN, BK, TM, TN, WM, WN, WSUBN>();
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        float ms;
+        cudaEventElapsedTime(&ms, start, stop);
+        mn = std::min(mn, ms);
+    }
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    double flops  = 2.0 * ctx.dims.M * ctx.dims.N * ctx.dims.K +
+                    3.0 * ctx.dims.M * ctx.dims.N;
+    double gflops = flops / (mn * 1e6);
+    return {BM, BN, BK, TM, TN, WM, WN, WSUBN, wmiter, wniter, nt, gflops, (double)mn};
+}
+
+template<typename... Cfgs, typename L>
+void run_autotune_warp_tiled(std::tuple<Cfgs...>,
+                             const MatmulTestContext& ctx,
+                             const L& launcher, int num_runs = 50) {
+    const double cublas_gflops = ctx.cublas_result.gflops;
+    constexpr int NC = sizeof...(Cfgs);
+    std::cout << "Testing " << NC << " configs (" << num_runs << " runs each)...\n\n";
+
+    std::vector<WarpAutotuneResult> results;
+    results.reserve(NC);
+    (results.push_back(
+        bench_one_warp<Cfgs::BM, Cfgs::BN, Cfgs::BK,
+                       Cfgs::TM, Cfgs::TN,
+                       Cfgs::WM, Cfgs::WN, Cfgs::WSUBN>(ctx, launcher, num_runs)
+    ), ...);
+
+    std::vector<int> valid;
+    for (int i = 0; i < NC; i++)
+        if (results[i].gflops > 0) valid.push_back(i);
+
+    int best = valid.empty() ? 0 : valid[0];
+    for (int i : valid)
+        if (results[i].gflops > results[best].gflops) best = i;
+
+    std::cout << std::fixed;
+    std::cout << "  #  | BM  | BN  | BK | TM | TN | WM  | WN  | WSUBN | WMI | WNI | Thrds | GFLOPS  | vs cuBLAS\n";
+    std::cout << " ----+-----+-----+----+----+----+-----+-----+-------+-----+-----+-------+---------+----------\n";
+    for (int i = 0; i < NC; i++) {
+        const auto& r = results[i];
+        if (r.gflops <= 0) continue;
+        std::cout << (i == best ? " >> " : "    ")
+                  << std::setw(2) << (i + 1) << " |"
+                  << std::setw(4) << r.BM    << " |"
+                  << std::setw(4) << r.BN    << " |"
+                  << std::setw(3) << r.BK    << " |"
+                  << std::setw(3) << r.TM    << " |"
+                  << std::setw(3) << r.TN    << " |"
+                  << std::setw(4) << r.WM    << " |"
+                  << std::setw(4) << r.WN    << " |"
+                  << std::setw(6) << r.WSUBN << " |"
+                  << std::setw(4) << r.WMITER << " |"
+                  << std::setw(4) << r.WNITER << " |"
+                  << std::setw(6) << r.numThreads << " |"
+                  << std::setprecision(1) << std::setw(8) << r.gflops << " |  "
+                  << std::setprecision(2) << std::setw(6)
+                  << (r.gflops / cublas_gflops) << "x\n";
+    }
+
+    const auto& b = results[best];
+    std::cout << "\nBest:  BM=" << b.BM << "  BN=" << b.BN
+              << "  BK=" << b.BK << "  TM=" << b.TM << "  TN=" << b.TN
+              << "  WM=" << b.WM << "  WN=" << b.WN
+              << "  WSUBN=" << b.WSUBN
+              << "  (WMITER=" << b.WMITER << " WNITER=" << b.WNITER << ")\n"
+              << "       " << std::setprecision(1) << b.gflops << " GFLOPS  ("
+              << std::setprecision(2) << (b.gflops / cublas_gflops)
+              << "x cuBLAS)\n";
+}
+
 #endif // TEST_HARNESS_H
