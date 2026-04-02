@@ -46,13 +46,13 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
                                                 float beta) {
   const int NUM_STAGES = 2;
 
-  // Dynamic shared memory — allows large BK without hitting the 48 KB static limit.
-  // Layout: As[2][BK][BM+4] then Bs[2][BK][BN], all contiguous.
-  extern __shared__ __align__(16) char smem[];
-  using As_t = float[BK][BM + 4];
-  using Bs_t = float[BK][BN];
-  auto As = reinterpret_cast<As_t *>(smem);
-  auto Bs = reinterpret_cast<Bs_t *>(smem + NUM_STAGES * sizeof(As_t));
+  struct alignas(16) Tiles {
+    float As[NUM_STAGES][BK][BM + 4];
+    float Bs[NUM_STAGES][BK][BN];
+    };
+    __shared__ Tiles smem;
+    auto &As = smem.As;
+    auto &Bs = smem.Bs;
 
   const int tx = threadIdx.x;
   const int ty = threadIdx.y;

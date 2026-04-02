@@ -3,20 +3,18 @@
 
 template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
 __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
-                warptiling_kernel(float *a, // A: M×K row-major
-                                                float *b, float *c, int M,
-                                                int N, int K, float alpha,
-                                                float beta) {
-
-//   extern __shared__ __align__(16) char smem[];
-//   using As_t = float[BK][BM + 4];
-//   using Bs_t = float[BK][BN];
-//   // Shared memory layout: first As, then Bs, all within a single dynamic allocation
-//   auto &As = *reinterpret_cast<As_t *>(smem);
-//   auto &Bs = *reinterpret_cast<Bs_t *>(smem + sizeof(As_t));
-
-  __shared__ float As[BK][BM + 4];
-  __shared__ float Bs[BK][BN];
+                warptiling_kernel(float * a,
+                                                float * b,
+                                                float * c,
+                                                int M, int N, int K,
+                                                float alpha, float beta) {
+  struct alignas(16) Tiles {
+    float As[BK][BM + 4];
+    float Bs[BK][BN];
+    };
+    __shared__ Tiles smem;
+    auto &As = smem.As;
+    auto &Bs = smem.Bs;
 
   // thread "coordinates"
   const int tx = threadIdx.x;
@@ -69,7 +67,7 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
     // Load A tile, transposing on-the-fly into As[k][m].
     for (int offset = 0; offset + rowStrideA <= BM; offset += rowStrideA) {
       float4 val = *reinterpret_cast<const float4 *>(
-          &a[(BM * by + innerRowA + offset) * K + i + innerColA * 4]);
+          &a[(BM * by + innerRowA + offset) * K + innerColA * 4]);
       As[innerColA * 4 + 0][innerRowA + offset] = val.x;
       As[innerColA * 4 + 1][innerRowA + offset] = val.y;
       As[innerColA * 4 + 2][innerRowA + offset] = val.z;
@@ -80,7 +78,7 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
     for (int offset = 0; offset + rowStrideB <= BK; offset += rowStrideB) {
       *reinterpret_cast<float4 *>(&Bs[innerRowB + offset][innerColB * 4]) =
           *reinterpret_cast<const float4 *>(
-              &b[(i + innerRowB + offset) * N + BN * bx + innerColB * 4]);
+              &b[(innerRowB + offset) * N + BN * bx + innerColB * 4]);
     }
 
     __syncthreads();
@@ -125,6 +123,11 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
         }
       }
     }
+
+    // Advance a, b pointer with the appropriate strides.
+    a += BK;
+    b += BK * N;
+
     __syncthreads();
   }
 

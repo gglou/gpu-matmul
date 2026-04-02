@@ -21,7 +21,6 @@ int main(int argc, char** argv) {
 
     constexpr int numWarps   = (BM / WM) * (BN / WN);
     constexpr int numThreads = numWarps * 32;
-    constexpr int shmem_size = 2 * (BK * (BM + 4) + BK * BN) * (int)sizeof(float);
 
     auto ctx = setup_test("Pipelining Kernel", parse_mode(argc, argv));
     int M = ctx.dims.M, N = ctx.dims.N, K = ctx.dims.K;
@@ -36,12 +35,9 @@ int main(int argc, char** argv) {
     dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
 
     auto kernel_fn = blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>;
-    cudaFuncSetAttribute(kernel_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_size);
-
-    std::this_thread::sleep_for(std::chrono::seconds(1));
 
     BenchmarkResult result = run_kernel_custom(ctx, "Pipelining", [&]() {
-        kernel_fn<<<blocks, threads, shmem_size>>>(
+        kernel_fn<<<blocks, threads>>>(
             d_a_t, ctx.d_b, ctx.d_c, M, N, K, 1.0f, 0.0f);
     });
 

@@ -50,10 +50,10 @@ sass kernel="naive": (build kernel)
         > inspect/run_{{kernel}}.sm{{sm}}.sass
     @echo "✓ SASS written to inspect/run_{{kernel}}.sm{{sm}}.sass"
 
-# Dump PTX IR                        (e.g. just ptx 2d_blocktiling_vectorized)
+# Dump PTX IR                        (e.g. just ptx warptiling)
 ptx kernel="naive":
     mkdir -p inspect
-    nvcc {{opt}} {{includes}} -arch=sm_{{sm}} {{src}}/run_{{kernel}}.cu {{shared}} {{libs}} --ptx \
+    nvcc {{opt}} {{includes}} -arch=sm_{{sm}} {{src}}/run_{{kernel}}.cu --ptx \
         -o inspect/run_{{kernel}}.sm{{sm}}.ptx
     @echo "✓ PTX written to inspect/run_{{kernel}}.sm{{sm}}.ptx"
 
@@ -95,6 +95,11 @@ plot-csv csv_path:
 sass-report kernel="naive": (build kernel)
     python3 profiler/sass_report.py ./run_{{kernel}} \
         -o profiler/output/{{kernel}}_sass.png
+
+# PTX IR analysis report              (e.g. just ptx-report warptiling)
+ptx-report kernel="naive": (ptx kernel)
+    python3 profiler/ptx_report.py inspect/run_{{kernel}}.sm{{sm}}.ptx \
+        -o profiler/output/{{kernel}}_ptx.png
 
 # ── Utility ───────────────────────────────────────────────────────────────────
 
