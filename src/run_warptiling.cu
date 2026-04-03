@@ -3,7 +3,7 @@
 
 int main(int argc, char** argv) {
     constexpr int BM = 128, BN = 128, BK = 16;
-    constexpr int TM = 4, TN = 4;
+    constexpr int TM = 16, TN = 4;
     constexpr int WM = 64, WN = 64, WSUBN = 8;
 
     constexpr int numWarps   = (BM / WM) * (BN / WN);

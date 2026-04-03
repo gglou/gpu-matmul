@@ -40,7 +40,7 @@ __device__ void load_tile(float *a_t, float *b,
 
 template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
 __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
-                blocktiling_2d_transpose_kernel(float *a_t, // A transposed: K×M row-major
+                pipelining_kernel(float *a_t, // A transposed: K×M row-major
                                                 float *b, float *c, int M,
                                                 int N, int K, float alpha,
                                                 float beta) {

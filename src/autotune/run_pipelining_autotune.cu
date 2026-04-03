@@ -97,7 +97,7 @@ struct Launcher {
         constexpr int numWarps   = (BM / WM) * (BN / WN);
         constexpr int numThreads = numWarps * 32;
         constexpr int shmem_size = 2 * (BK * (BM + 4) + BK * BN) * (int)sizeof(float);
-        auto kernel = blocktiling_2d_transpose_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>;
+        auto kernel = pipelining_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>;
         cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_size);
         dim3 threads(numThreads);
         dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
