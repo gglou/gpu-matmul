@@ -1,6 +1,13 @@
 #ifndef PING_PONG_PIPELINE_KERNEL_H
 #define PING_PONG_PIPELINE_KERNEL_H
 
+// This kernel is an experiment that I ran to understand how by splitting
+// the shared memory in to two (similarly to double buffering) but without 
+// cp.async would help interleaving loading and compute. (By having one less 
+// __syncthreads()). (Spoiler: Even though it reduced the warp scheduling on 
+// __syncthreads() barrier, the increased shared memory usage and smaller tiling
+// reduced the overall efficiency. (Profiler later also showed __syncthreads() was not)
+// a bottleneck.
 template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
 __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
                 ping_pong_pipeline_kernel(float *a, // A: M×K row-major

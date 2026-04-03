@@ -1,7 +1,7 @@
 #ifndef COL_MAJOR_WARP_TILING_KERNEL_H
 #define COL_MAJOR_WARP_TILING_KERNEL_H
 
-// A: row-major, B: col-major (pre-transposed to row-major by caller), C: col-major.
+// A: row-major, B: col-major, C: col-major.
 template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
 __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
                 col_major_warptiling_kernel(float * __restrict__ a,
@@ -28,9 +28,9 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
   const int innerRowA = linearThreadId / (BK / 4);
   const int innerColA = linearThreadId % (BK / 4);
   constexpr int rowStrideA = (numThreads * 4) / BK;
-  const int innerRowB = linearThreadId / (BN / 4);
-  const int innerColB = linearThreadId % (BN / 4);
-  constexpr int rowStrideB = numThreads / (BN / 4);
+  const int innerRowB = linearThreadId / (BK / 4);
+  const int innerColB = linearThreadId % (BK / 4);
+  constexpr int rowStrideB = numThreads / (BK / 4);
 
   constexpr int warpSize = 32;
   const int warpId = linearThreadId / warpSize;
@@ -63,11 +63,14 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
       As[innerColA * 4 + 3][innerRowA + offset] = val.w;
     }
 
-    // Load Bs from row-major B (caller pre-transposes col-major B to row-major).
-    for (int offset = 0; offset + rowStrideB <= BK; offset += rowStrideB) {
-      *reinterpret_cast<float4 *>(&Bs[innerRowB + offset][innerColB * 4]) =
-          *reinterpret_cast<const float4 *>(
-              &b[(innerRowB + offset) * N + BN * bx + innerColB * 4]);
+    // Load col-major B: b[n*K + k]. Float4 along k (contiguous), scatter into Bs[k][n].
+    for (int offset = 0; offset + rowStrideB <= BN; offset += rowStrideB) {
+      float4 val = *reinterpret_cast<const float4 *>(
+          &b[(BN * bx + innerRowB + offset) * K + innerColB * 4]);
+      Bs[innerColB * 4 + 0][innerRowB + offset] = val.x;
+      Bs[innerColB * 4 + 1][innerRowB + offset] = val.y;
+      Bs[innerColB * 4 + 2][innerRowB + offset] = val.z;
+      Bs[innerColB * 4 + 3][innerRowB + offset] = val.w;
     }
 
     __syncthreads();
@@ -105,7 +108,7 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
     }
 
     a += BK;
-    b += BK * N;
+    b += BK;
 
     __syncthreads();
   }
