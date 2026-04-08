@@ -24,8 +24,9 @@ __device__ __forceinline__ void cp_async_wait() {
 }
 
 template <int BM, int BN, int BK, int WM, int WN>
-__device__ void load_tile(float *a_t, float *b,
-                          float (&As_stage)[BK][BM + 4],
+__device__ void load_tile(const float * __restrict__ a_t,
+                          const float * __restrict__ b,
+                          float (&As_stage)[BK][BM],
                           float (&Bs_stage)[BK][BN], int kOffset, int by,
                           int bx, int M, int N) {
   constexpr int numThreads = ((BM / WM) * (BN / WN)) * 32;
@@ -55,12 +56,13 @@ __device__ void load_tile(float *a_t, float *b,
 
 template <int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN>
 __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
-                pipelining_kernel(float *a_t, // A transposed: K×M row-major
-                                  float *b, float *c, int M,
+                pipelining_kernel(const float * __restrict__ a_t,
+                                  const float * __restrict__ b,
+                                  float * __restrict__ c, int M,
                                   int N, int K, float alpha,
                                   float beta) {
   struct alignas(128) Tiles {
-    float As[2][BK][BM + 4];
+    float As[2][BK][BM];
     float Bs[2][BK][BN];
   };
   __shared__ Tiles smem;
@@ -69,6 +71,7 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
 
   const int tx = threadIdx.x;
   const int ty = threadIdx.y;
+
   const int bx = blockIdx.x;
   const int by = blockIdx.y;
 
@@ -115,19 +118,29 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
     }
     __syncthreads();
 
-    // Prologue: load j=0 into register buffer 0.
+    // Prologue: load j=0 into register buffer 0 (float4 vectorized).
     for (int wSubRow = 0; wSubRow < WMITER; wSubRow++) {
-      for (int tid_m = 0; tid_m < TM; tid_m++) {
-        const int aRow =
-            warpRow * WM + wSubRow * WSUBM * TM + threadWarpRow * TM + tid_m;
-        regM[0][wSubRow * TM + tid_m] = As[compute_stage][0][aRow];
+      const int aBase =
+          warpRow * WM + wSubRow * WSUBM * TM + threadWarpRow * TM;
+      for (int ti = 0; ti < TM; ti += 4) {
+        const float4 a4 = *reinterpret_cast<const float4 *>(
+            &As[compute_stage][0][aBase + ti]);
+        regM[0][wSubRow * TM + ti + 0] = a4.x;
+        regM[0][wSubRow * TM + ti + 1] = a4.y;
+        regM[0][wSubRow * TM + ti + 2] = a4.z;
+        regM[0][wSubRow * TM + ti + 3] = a4.w;
       }
     }
     for (int wSubCol = 0; wSubCol < WNITER; wSubCol++) {
-      for (int tid_n = 0; tid_n < TN; tid_n++) {
-        const int bCol =
-            warpCol * WN + wSubCol * WSUBN * TN + threadWarpCol * TN + tid_n;
-        regN[0][wSubCol * TN + tid_n] = Bs[compute_stage][0][bCol];
+      const int bBase =
+          warpCol * WN + wSubCol * WSUBN * TN + threadWarpCol * TN;
+      for (int ti = 0; ti < TN; ti += 4) {
+        const float4 b4 = *reinterpret_cast<const float4 *>(
+            &Bs[compute_stage][0][bBase + ti]);
+        regN[0][wSubCol * TN + ti + 0] = b4.x;
+        regN[0][wSubCol * TN + ti + 1] = b4.y;
+        regN[0][wSubCol * TN + ti + 2] = b4.z;
+        regN[0][wSubCol * TN + ti + 3] = b4.w;
       }
     }
 
@@ -135,20 +148,30 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
       const int cur = j & 1;
       const int nxt = 1 - cur;
 
-      // Prefetch j+1 into alternate buffer (overlaps with FMAs below).
+      // Prefetch j+1 into alternate buffer (float4 vectorized).
       if (j + 1 < BK) {
         for (int wSubRow = 0; wSubRow < WMITER; wSubRow++) {
-          for (int tid_m = 0; tid_m < TM; tid_m++) {
-            const int aRow =
-                warpRow * WM + wSubRow * WSUBM * TM + threadWarpRow * TM + tid_m;
-            regM[nxt][wSubRow * TM + tid_m] = As[compute_stage][j + 1][aRow];
+          const int aBase =
+              warpRow * WM + wSubRow * WSUBM * TM + threadWarpRow * TM;
+          for (int ti = 0; ti < TM; ti += 4) {
+            const float4 a4 = *reinterpret_cast<const float4 *>(
+                &As[compute_stage][j + 1][aBase + ti]);
+            regM[nxt][wSubRow * TM + ti + 0] = a4.x;
+            regM[nxt][wSubRow * TM + ti + 1] = a4.y;
+            regM[nxt][wSubRow * TM + ti + 2] = a4.z;
+            regM[nxt][wSubRow * TM + ti + 3] = a4.w;
           }
         }
         for (int wSubCol = 0; wSubCol < WNITER; wSubCol++) {
-          for (int tid_n = 0; tid_n < TN; tid_n++) {
-            const int bCol =
-                warpCol * WN + wSubCol * WSUBN * TN + threadWarpCol * TN + tid_n;
-            regN[nxt][wSubCol * TN + tid_n] = Bs[compute_stage][j + 1][bCol];
+          const int bBase =
+              warpCol * WN + wSubCol * WSUBN * TN + threadWarpCol * TN;
+          for (int ti = 0; ti < TN; ti += 4) {
+            const float4 b4 = *reinterpret_cast<const float4 *>(
+                &Bs[compute_stage][j + 1][bBase + ti]);
+            regN[nxt][wSubCol * TN + ti + 0] = b4.x;
+            regN[nxt][wSubCol * TN + ti + 1] = b4.y;
+            regN[nxt][wSubCol * TN + ti + 2] = b4.z;
+            regN[nxt][wSubCol * TN + ti + 3] = b4.w;
           }
         }
       }
@@ -181,7 +204,7 @@ __global__ void __launch_bounds__(((BM / WM) * (BN / WN)) * 32)
         for (int tid_n = 0; tid_n < TN; tid_n += 4) {
           const int resIdx =
               (wSubRow * TM + tid_m) * (WNITER * TN) + wSubCol * TN + tid_n;
-
+              
           float4 c_reg = *reinterpret_cast<const float4 *>(
               &c_interim[(threadWarpRow * TM + tid_m) * N +
                          threadWarpCol * TN + tid_n]);

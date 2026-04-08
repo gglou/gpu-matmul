@@ -16,65 +16,36 @@
 //   (BK*BN) % (numThreads*4) == 0           (B loads)
 //   TN % 4 == 0                              (float4 epilogue stores)
 using AllConfigs = std::tuple<
-    // ═════════════════════════════════════════════════════════════════════════
-    // BM=128 BN=128  BK=8  (~16 KB) — PRIMARY search space
-    // ═════════════════════════════════════════════════════════════════════════
+    // Only 256-thread configs — 128-thread BK=16 stalls, 64-thread too few.
+    // Asymmetric BK=16 (128×256 / 256×128) at exactly 48 KB static smem.
+    //
     //                        BM   BN   BK  TM  TN   WM   WN  WSUBN    WMI×WNI  threads
-    // ── TM=TN=4, 256 threads ─────────────────────────────────────────────────
-    WarpTileConfig<         128, 128,  8,  4,  4,  16, 128,   8>,  //  1×4     256
-    WarpTileConfig<         128, 128,  8,  4,  4,  32,  64,   4>,  //  1×4     256
-    WarpTileConfig<         128, 128,  8,  4,  4,  32,  64,   8>,  //  2×2     256
-    WarpTileConfig<         128, 128,  8,  4,  4,  64,  32,   4>,  //  2×2     256
-    WarpTileConfig<         128, 128,  8,  4,  4,  64,  32,   8>,  //  4×1     256
-    WarpTileConfig<         128, 128,  8,  4,  4, 128,  16,   4>,  //  4×1     256
-    // ── TM=TN=4, 128 threads (skip WMITER=8 / WNITER=8 — they stall) ────────
-    WarpTileConfig<         128, 128,  8,  4,  4,  32, 128,   8>,  //  2×4     128
-    WarpTileConfig<         128, 128,  8,  4,  4,  64,  64,   4>,  //  2×4     128
-    WarpTileConfig<         128, 128,  8,  4,  4,  64,  64,   8>,  //  4×2     128
-    WarpTileConfig<         128, 128,  8,  4,  4, 128,  32,   4>,  //  4×2     128
-    // ── TM=TN=8, 256 threads ─────────────────────────────────────────────────
-    WarpTileConfig<         128, 128,  8,  8,  8,  32,  64,   8>,  //  1×1     256
-    WarpTileConfig<         128, 128,  8,  8,  8,  64,  32,   4>,  //  1×1     256
-    WarpTileConfig<         128, 128,  8,  8,  8,  16, 128,  16>,  //  1×1     256
-    WarpTileConfig<         128, 128,  8,  8,  8, 128,  16,   2>,  //  1×1     256
-    // ── TM=TN=8, 128 threads (expanded around best config) ───────────────────
-    WarpTileConfig<         128, 128,  8,  8,  8,  32, 128,   8>,  //  1×2     128
-    WarpTileConfig<         128, 128,  8,  8,  8,  64,  64,   4>,  //  1×2     128
-    WarpTileConfig<         128, 128,  8,  8,  8, 128,  32,   2>,  //  1×2     128
-    WarpTileConfig<         128, 128,  8,  8,  8,  64,  64,   8>,  //  2×1     128
-    WarpTileConfig<         128, 128,  8,  8,  8, 128,  32,   4>,  //  2×1     128  ★
-    WarpTileConfig<         128, 128,  8,  8,  8,  32, 128,  16>,  //  2×1     128
-    // ── Asymmetric TM=8 TN=4, 128 threads ────────────────────────────────────
-    WarpTileConfig<         128, 128,  8,  8,  4, 128,  32,   4>,  //  2×2     128
-    WarpTileConfig<         128, 128,  8,  8,  4,  64,  64,   8>,  //  2×2     128
-    // ── Asymmetric TM=4 TN=8, 128 threads ────────────────────────────────────
-    WarpTileConfig<         128, 128,  8,  4,  8, 128,  32,   2>,  //  2×2     128
-    WarpTileConfig<         128, 128,  8,  4,  8,  64,  64,   4>,  //  2×2     128
-    // ═════════════════════════════════════════════════════════════════════════
-    // BM=128 BN=128  BK=16  (~33 KB) — 256-thread only (128t stalls)
-    // ═════════════════════════════════════════════════════════════════════════
-    //                        BM   BN   BK  TM  TN   WM   WN  WSUBN    WMI×WNI  threads
+    // ═══ 128×128 BK=16 (~32 KB) — the proven baseline ══════════════════════
+    WarpTileConfig<         128, 128, 16,  8,  8,  64,  32,   4>,  //  2×1     256  ★ runner best
     WarpTileConfig<         128, 128, 16,  8,  8,  32,  64,   8>,  //  1×1     256
-    WarpTileConfig<         128, 128, 16,  8,  8,  64,  32,   4>,  //  1×1     256
-    // ═════════════════════════════════════════════════════════════════════════
-    // BM=128 BN=256  BK=8  (~24 KB) — asymmetric wide tiles
-    // ═════════════════════════════════════════════════════════════════════════
-    //                        BM   BN   BK  TM  TN   WM   WN  WSUBN    WMI×WNI  threads
-    WarpTileConfig<         128, 256,  8,  8,  8,  32, 128,   8>,  //  1×2     256
-    WarpTileConfig<         128, 256,  8,  8,  8,  32, 128,  16>,  //  2×1     256
+    WarpTileConfig<         128, 128, 16,  8,  8,  16, 128,  16>,  //  1×1     256
+    WarpTileConfig<         128, 128, 16,  8,  8, 128,  16,   2>,  //  1×1     256
+    // ═══ 128×256 BK=16 (~48 KB) — wide, higher arith intensity ═════════════
+    WarpTileConfig<         128, 256, 16,  8,  8,  64,  64,   4>,  //  1×2     256
+    WarpTileConfig<         128, 256, 16,  8,  8,  64,  64,   8>,  //  2×1     256
+    WarpTileConfig<         128, 256, 16,  8,  8, 128,  32,   4>,  //  2×1     256
+    WarpTileConfig<         128, 256, 16,  8,  8,  32, 128,   8>,  //  1×2     256
+    WarpTileConfig<         128, 256, 16,  8,  8,  32, 128,  16>,  //  2×1     256
+    // ═══ 256×128 BK=16 (~48 KB) — tall, higher arith intensity ═════════════
+    WarpTileConfig<         256, 128, 16,  8,  8,  64,  64,   4>,  //  1×2     256
+    WarpTileConfig<         256, 128, 16,  8,  8,  64,  64,   8>,  //  2×1     256
+    WarpTileConfig<         256, 128, 16,  8,  8, 128,  32,   4>,  //  2×1     256
+    WarpTileConfig<         256, 128, 16,  8,  8,  32, 128,   8>,  //  1×2     256
+    WarpTileConfig<         256, 128, 16,  8,  8,  32, 128,  16>,  //  2×1     256
+    // ═══ 64×128 / 128×64 BK=16 (~25 KB) — small tile, maybe more blocks ═══
+    WarpTileConfig<          64, 128, 16,  8,  8,  32,  64,   8>,  //  1×1     128
+    WarpTileConfig<          64, 128, 16,  8,  8,  64,  32,   4>,  //  1×1     128
+    WarpTileConfig<         128,  64, 16,  8,  8,  64,  32,   4>,  //  1×1     128
+    WarpTileConfig<         128,  64, 16,  8,  8,  32,  64,   8>,  //  1×1     128
+    // ═══ 128×256 / 256×128 BK=8 (~24 KB) ═══════════════════════════════════
     WarpTileConfig<         128, 256,  8,  8,  8,  64,  64,   4>,  //  1×2     256
-    WarpTileConfig<         128, 256,  8,  8,  8,  64,  64,   8>,  //  2×1     256
-    WarpTileConfig<         128, 256,  8,  8,  8, 128,  32,   2>,  //  1×2     256
     WarpTileConfig<         128, 256,  8,  8,  8, 128,  32,   4>,  //  2×1     256
-    // ═════════════════════════════════════════════════════════════════════════
-    // BM=256 BN=128  BK=8  (~24 KB) — asymmetric tall tiles
-    // ═════════════════════════════════════════════════════════════════════════
-    //                        BM   BN   BK  TM  TN   WM   WN  WSUBN    WMI×WNI  threads
-    WarpTileConfig<         256, 128,  8,  8,  8,  32, 128,   8>,  //  1×2     256
-    WarpTileConfig<         256, 128,  8,  8,  8,  32, 128,  16>,  //  2×1     256
     WarpTileConfig<         256, 128,  8,  8,  8,  64,  64,   4>,  //  1×2     256
-    WarpTileConfig<         256, 128,  8,  8,  8,  64,  64,   8>,  //  2×1     256
-    WarpTileConfig<         256, 128,  8,  8,  8, 128,  32,   2>,  //  1×2     256
     WarpTileConfig<         256, 128,  8,  8,  8, 128,  32,   4>   //  2×1     256
 >;
 
@@ -96,12 +67,10 @@ struct Launcher {
     void launch() const {
         constexpr int numWarps   = (BM / WM) * (BN / WN);
         constexpr int numThreads = numWarps * 32;
-        constexpr int shmem_size = 2 * (BK * (BM + 4) + BK * BN) * (int)sizeof(float);
         auto kernel = pipelining_kernel<BM, BN, BK, TM, TN, WM, WN, WSUBN>;
-        cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_size);
         dim3 threads(numThreads);
         dim3 blocks((N + BN - 1) / BN, (M + BM - 1) / BM);
-        kernel<<<blocks, threads, shmem_size>>>(d_a_t, d_b, d_c, M, N, K, 1.0f, 0.0f);
+        kernel<<<blocks, threads>>>(d_a_t, d_b, d_c, M, N, K, 1.0f, 0.0f);
     }
 };
 
