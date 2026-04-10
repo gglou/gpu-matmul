@@ -4,6 +4,7 @@
 #include <iostream>
 #include <iomanip>
 #include <cstring>
+#include <unistd.h>
 #include <algorithm>
 #include <vector>
 #include <tuple>
@@ -90,7 +91,7 @@ inline BenchmarkResult run_kernel(
     const char* name,
     dim3 threads,
     dim3 blocks = dim3(0, 0),
-    int num_runs = 50)
+    int num_runs = 10)
 {
     if (blocks.x == 0 && blocks.y == 0) {
         blocks = dim3(
@@ -128,7 +129,7 @@ BenchmarkResult run_kernel_custom(
     const MatmulTestContext& ctx,
     const char* name,
     LaunchFn&& launch,
-    int num_runs = 50)
+    int num_runs = 10)
 {
     if (ctx.mode == RunMode::Profile) {
         std::cout << "Profiling '" << name << "' (single launch)...\n";
@@ -160,6 +161,7 @@ BenchmarkResult run_kernel_custom(
         total += ms;
         mn = std::min(mn, ms);
         mx = std::max(mx, ms);
+        usleep(500000);
     }
 
     cudaEventDestroy(start);
@@ -216,7 +218,7 @@ struct AutotuneResult {
 
 template<int BM, int BN, int BK, int TM, int TN, typename Launcher>
 AutotuneResult bench_one(const MatmulTestContext& ctx, const Launcher& launcher,
-                         int num_runs = 50) {
+                         int num_runs = 10) {
     launcher.template launch<BM, BN, BK, TM, TN>();
     cudaDeviceSynchronize();
 
@@ -244,7 +246,7 @@ AutotuneResult bench_one(const MatmulTestContext& ctx, const Launcher& launcher,
 // Iterate over a tuple of TileConfigs, bench each, print a ranked table.
 template<typename... Cfgs, typename Launcher>
 void run_autotune_tiled(std::tuple<Cfgs...>, const MatmulTestContext& ctx,
-                        const Launcher& launcher, int num_runs = 50) {
+                        const Launcher& launcher, int num_runs = 10) {
     const double cublas_gflops = ctx.cublas_result.gflops;
     constexpr int N = sizeof...(Cfgs);
     std::cout << "Testing " << N << " configs (" << num_runs << " runs each)...\n\n";
@@ -308,7 +310,7 @@ struct WarpAutotuneResult {
 template<int BM, int BN, int BK, int TM, int TN, int WM, int WN, int WSUBN,
          typename L>
 WarpAutotuneResult bench_one_warp(const MatmulTestContext& ctx,
-                                  const L& launcher, int num_runs = 50) {
+                                  const L& launcher, int num_runs = 10) {
     constexpr int nw     = (BM / WM) * (BN / WN);
     constexpr int WSUBM  = 32 / WSUBN;
     constexpr int wniter = WN / (WSUBN * TN);
@@ -350,18 +352,18 @@ WarpAutotuneResult bench_one_warp(const MatmulTestContext& ctx,
 template<typename... Cfgs, typename L>
 void run_autotune_warp_tiled(std::tuple<Cfgs...>,
                              const MatmulTestContext& ctx,
-                             const L& launcher, int num_runs = 50) {
+                             const L& launcher, int num_runs = 10) {
     const double cublas_gflops = ctx.cublas_result.gflops;
     constexpr int NC = sizeof...(Cfgs);
     std::cout << "Testing " << NC << " configs (" << num_runs << " runs each)...\n\n";
 
     std::vector<WarpAutotuneResult> results;
     results.reserve(NC);
-    (results.push_back(
+    (( results.push_back(
         bench_one_warp<Cfgs::BM, Cfgs::BN, Cfgs::BK,
                        Cfgs::TM, Cfgs::TN,
                        Cfgs::WM, Cfgs::WN, Cfgs::WSUBN>(ctx, launcher, num_runs)
-    ), ...);
+    ), sleep(1) ), ...);
 
     std::vector<int> valid;
     for (int i = 0; i < NC; i++)

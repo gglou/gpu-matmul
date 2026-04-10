@@ -16,37 +16,33 @@
 //   (BK*BN) % (numThreads*4) == 0           (B loads)
 //   TN % 4 == 0                              (float4 epilogue stores)
 using AllConfigs = std::tuple<
-    // Only 256-thread configs — 128-thread BK=16 stalls, 64-thread too few.
-    // Asymmetric BK=16 (128×256 / 256×128) at exactly 48 KB static smem.
-    //
     //                        BM   BN   BK  TM  TN   WM   WN  WSUBN    WMI×WNI  threads
-    // ═══ 128×128 BK=16 (~32 KB) — the proven baseline ══════════════════════
-    WarpTileConfig<         128, 128, 16,  8,  8,  64,  32,   4>,  //  2×1     256  ★ runner best
+    // ═══ TM=8 TN=8: 128×128 BK=16 (~32 KB) — the proven baseline ═══════════
+    WarpTileConfig<         128, 128, 16,  8,  8,  64,  32,   4>,  //  2×1     256  ★ prev best
     WarpTileConfig<         128, 128, 16,  8,  8,  32,  64,   8>,  //  1×1     256
-    WarpTileConfig<         128, 128, 16,  8,  8,  16, 128,  16>,  //  1×1     256
-    WarpTileConfig<         128, 128, 16,  8,  8, 128,  16,   2>,  //  1×1     256
-    // ═══ 128×256 BK=16 (~48 KB) — wide, higher arith intensity ═════════════
-    WarpTileConfig<         128, 256, 16,  8,  8,  64,  64,   4>,  //  1×2     256
-    WarpTileConfig<         128, 256, 16,  8,  8,  64,  64,   8>,  //  2×1     256
-    WarpTileConfig<         128, 256, 16,  8,  8, 128,  32,   4>,  //  2×1     256
-    WarpTileConfig<         128, 256, 16,  8,  8,  32, 128,   8>,  //  1×2     256
-    WarpTileConfig<         128, 256, 16,  8,  8,  32, 128,  16>,  //  2×1     256
-    // ═══ 256×128 BK=16 (~48 KB) — tall, higher arith intensity ═════════════
-    WarpTileConfig<         256, 128, 16,  8,  8,  64,  64,   4>,  //  1×2     256
-    WarpTileConfig<         256, 128, 16,  8,  8,  64,  64,   8>,  //  2×1     256
-    WarpTileConfig<         256, 128, 16,  8,  8, 128,  32,   4>,  //  2×1     256
-    WarpTileConfig<         256, 128, 16,  8,  8,  32, 128,   8>,  //  1×2     256
-    WarpTileConfig<         256, 128, 16,  8,  8,  32, 128,  16>,  //  2×1     256
-    // ═══ 64×128 / 128×64 BK=16 (~25 KB) — small tile, maybe more blocks ═══
+    // ═══ TM=8 TN=8: 64×128 BK=16 (~25 KB) ══════════════════════════════════
     WarpTileConfig<          64, 128, 16,  8,  8,  32,  64,   8>,  //  1×1     128
     WarpTileConfig<          64, 128, 16,  8,  8,  64,  32,   4>,  //  1×1     128
-    WarpTileConfig<         128,  64, 16,  8,  8,  64,  32,   4>,  //  1×1     128
-    WarpTileConfig<         128,  64, 16,  8,  8,  32,  64,   8>,  //  1×1     128
-    // ═══ 128×256 / 256×128 BK=8 (~24 KB) ═══════════════════════════════════
+    // ═══ TM=8 TN=8: 128×256 BK=8 (~24 KB) ══════════════════════════════════
     WarpTileConfig<         128, 256,  8,  8,  8,  64,  64,   4>,  //  1×2     256
-    WarpTileConfig<         128, 256,  8,  8,  8, 128,  32,   4>,  //  2×1     256
-    WarpTileConfig<         256, 128,  8,  8,  8,  64,  64,   4>,  //  1×2     256
-    WarpTileConfig<         256, 128,  8,  8,  8, 128,  32,   4>   //  2×1     256
+    WarpTileConfig<         128, 256,  8,  8,  8,  64,  64,   8>,  //  2×1     256
+    // ═══ TM=16 TN=8: 128×256 BK=8 (~24 KB) — reference-kernel-like ═════════
+    WarpTileConfig<         128, 256,  8, 16,  8,  64,  64,   8>,  //  1×1     256
+    // ═══ TM=16 TN=4: 128×128 BK=16 (~32 KB) — 64 accumulators, wide WSUBN ═
+    WarpTileConfig<         128, 128, 16, 16,  4,  64,  32,   8>,  //  1×1     256
+    WarpTileConfig<         128, 128, 16, 16,  4,  32,  64,  16>,  //  1×1     256
+    // ═══ TM=16 TN=4: 128×256 BK=8 (~24 KB) — 64 acc, WNITER=2 ═════════════
+    WarpTileConfig<         128, 256,  8, 16,  4,  64,  64,   8>,  //  1×2     256
+    WarpTileConfig<         128, 256,  8, 16,  4,  64,  64,  16>,  //  2×1     256
+    // ═══ TM=8 TN=4: 128×128 BK=16 (~32 KB) — 32 acc, low reg pressure ═════
+    WarpTileConfig<         128, 128, 16,  8,  4,  64,  32,   8>,  //  2×1     256
+    WarpTileConfig<         128, 128, 16,  8,  4,  32,  64,   8>,  //  1×2     256
+    // ═══ TM=8 TN=4: 64×128 BK=16 (~25 KB) — 32 acc, more blocks ═══════════
+    WarpTileConfig<          64, 128, 16,  8,  4,  32,  64,   8>,  //  1×2     128
+    WarpTileConfig<          64, 128, 16,  8,  4,  64,  32,   8>,  //  2×1     128
+    // ═══ TM=4 TN=8: 128×128 BK=16 (~32 KB) — 32 acc, different aspect ═════
+    WarpTileConfig<         128, 128, 16,  4,  8,  64,  32,   4>,  //  2×1     256
+    WarpTileConfig<         128, 128, 16,  4,  8,  32,  64,   8>,  //  2×1     256
 >;
 
 static float* transpose_a(float* d_a, int M, int K) {
