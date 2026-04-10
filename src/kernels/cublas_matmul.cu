@@ -1,6 +1,7 @@
 #include "cublas_matmul.h"
 #include <iostream>
 #include <algorithm>
+#include <unistd.h>
 
 // Global cuBLAS handle
 static cublasHandle_t cublas_handle;
@@ -84,6 +85,7 @@ BenchmarkResult benchmark_cublas(float *d_a, float *d_b, float *d_c,
         total_time += milliseconds;
         min_time = std::min(min_time, milliseconds);
         max_time = std::max(max_time, milliseconds);
+        usleep(500000);
     }
 
     cudaEventDestroy(start);

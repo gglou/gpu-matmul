@@ -5,13 +5,14 @@
 #   just sass 2d_blocktiling_vectorized
 #   just ptx  2d_blocktiling_vectorized
 
-sm       := "120"
-src      := "src"
-kernels  := "src/kernels"
-libs     := "-lcublas"
-includes := "-I./src"
-opt      := "-O3"
-shared   := src / "benchmark.cu" + " " + src / "utils.cu" + " " + kernels / "cublas_matmul.cu"
+sm         := "120"
+sm_tensor  := "120"
+src        := "src"
+kernels    := "src/kernels"
+libs       := "-lcublas -lcuda"
+includes   := "-I./src"
+opt        := "-O3"
+shared     := src / "benchmark.cu" + " " + src / "utils.cu" + " " + kernels / "cublas_matmul.cu"
 
 
 # List all available recipes
@@ -33,6 +34,19 @@ build kernel="naive":
 # Build + run a kernel               (e.g. just run naive)
 run kernel="naive": (build kernel)
     ./run_{{kernel}}
+
+# ── Tensor kernels (sm_120 for mma.sync on consumer Blackwell) ───────────────
+
+# Build a tensor kernel              (e.g. just build-tensor kernel_1)
+build-tensor kernel:
+    nvcc {{opt}} {{includes}} -arch=sm_{{sm_tensor}} {{src}}/run_tensor_{{kernel}}.cu {{shared}} {{libs}} -o run_tensor_{{kernel}}
+    @echo "✓ Built: run_tensor_{{kernel}}"
+
+# Build + run a tensor kernel        (e.g. just run-tensor kernel_1)
+run-tensor kernel: (build-tensor kernel)
+    ./run_tensor_{{kernel}}
+
+# ── Autotune ─────────────────────────────────────────────────────────────────
 
 # Build + autotune a kernel          (e.g. just autotune warptiling)
 autotune kernel:

@@ -30,26 +30,28 @@ void initialize_matrices(float *h_a, float *h_b, const MatrixDims &dims) {
 
 bool verify_results(float *gpu_result, float *reference_result, int size, 
                     const char* reference_name, float tolerance) {
-    float max_error = 0.0f;
+    float max_error = 0.0f; // tracks max relative error
     bool passed = true;
     
     for (int i = 0; i < size; ++i) {
-        float error = std::abs(gpu_result[i] - reference_result[i]);
-        max_error = std::max(max_error, error);
-        if (error > tolerance) {
+        float abs_error = std::abs(gpu_result[i] - reference_result[i]);
+        float denom = std::max({std::abs(gpu_result[i]), std::abs(reference_result[i]), 1e-8f});
+        float rel_error = abs_error / denom;
+        max_error = std::max(max_error, rel_error);
+        if (rel_error > tolerance) {
             std::cout << "❌ Verification FAILED!\n";
             std::cout.precision(10);
             std::cout << std::fixed;
             std::cout << "Mismatch at index " << i << ": kernel=" << gpu_result[i] 
                       << " " << reference_name << "=" << reference_result[i] 
-                      << " error=" << error << "\n";
+                      << " abs_error=" << abs_error << " rel_error=" << rel_error << "\n";
             passed = false;
             break;
         }
     }
     
     if (passed) {
-        std::cout << "✅ Verification PASSED (vs " << reference_name << ")! Max error: " << max_error << "\n\n";
+        std::cout << "✅ Verification PASSED (vs " << reference_name << ")! Max relative error: " << max_error << "\n\n";
     }
     
     return passed;

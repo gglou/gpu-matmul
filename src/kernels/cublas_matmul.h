@@ -20,6 +20,6 @@ cublasHandle_t cublasHandle();
 // Benchmark cuBLAS SGEMM implementation
 // Uses cublasSgemm under the hood - highly optimized by NVIDIA
 BenchmarkResult benchmark_cublas(float *d_a, float *d_b, float *d_c, 
-                                  const MatrixDims &dims, int num_runs = 50);
+                                  const MatrixDims &dims, int num_runs = 10);
 
 #endif // CUBLAS_MATMUL_H

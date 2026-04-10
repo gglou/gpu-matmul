@@ -15,7 +15,7 @@ static float* transpose_a(float* d_a, int M, int K) {
 }
 
 int main(int argc, char** argv) {
-    constexpr int BM = 128, BN = 128, BK = 16;
+    constexpr int BM = 64, BN = 128, BK = 16;
     constexpr int TM = 8, TN = 8;
     constexpr int WM = 64, WN = 32, WSUBN = 4;
 
