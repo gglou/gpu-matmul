@@ -75,7 +75,7 @@ ptx kernel="naive":
 run-all:
     @for k in naive coalesced shared_mem 1d_blocktiling 2d_blocktiling \
                2d_blocktiling_vectorized 2d_blocktiling_transpose \
-               warptiling col_major_warptiling transposed_a_warptiling transposed_a_pipeline double_buffering_pipeline ping_pong_pipeline; do \
+               warptiling double_buffering_pipeline ping_pong_pipeline; do \
         echo ""; \
         echo "══════════════════════════════════════════"; \
         echo "  Running: $k"; \
@@ -125,9 +125,6 @@ clean:
           run_2d_blocktiling_autotune run_2d_blocktiling_vectorized_autotune \
           run_2d_blocktiling_transpose_autotune \
           run_warptiling run_warptiling_autotune \
-          run_col_major_warptiling \
-          run_transposed_a_warptiling \
-          run_transposed_a_pipeline run_transposed_a_pipeline_autotune \
           run_double_buffering_pipeline run_double_buffering_pipeline_autotune \
           run_ping_pong_pipeline run_ping_pong_pipeline_autotune \
           run_reference_warptiling run_cublas

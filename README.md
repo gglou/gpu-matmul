@@ -18,9 +18,8 @@ References:
 | `1d_blocktiling` | 1D register tiling — each thread computes a column of outputs |
 | `2d_blocktiling` | 2D register tiling — each thread computes a TM×TN output tile |
 | `2d_blocktiling_vectorized` | 2D tiling with float4 loads and on-the-fly A transpose |
-| `2d_blocktiling_transpose` | 2D tiling with pre-transposed A layout |
+| `2d_blocktiling_transpose` | 2D tiling with float4 loads and on-the-fly A transpose into shared memory |
 | `warptiling` | Warp-level tiling on top of 2D block tiling |
-| `pipelining` | 2-stage async pipeline (cp.async) with pre-transposed A |
 | `double_buffering_pipeline` | Double-buffered pipeline with on-the-fly A transpose |
 | `ping_pong_pipeline` | Ping-pong buffered pipeline |
 
@@ -44,7 +43,6 @@ gpu-matmul/
 │   │   ├── 2d_blocktiling_vectorized_kernel.h
 │   │   ├── 2d_blocktiling_transpose_kernel.h
 │   │   ├── warptiling_kernel.h
-│   │   ├── pipelining_kernel.h
 │   │   ├── double_buffering_pipeline_kernel.h
 │   │   ├── ping_pong_pipeline.h
 │   │   └── cublas_matmul.h/cu
@@ -53,7 +51,6 @@ gpu-matmul/
 │       ├── run_2d_blocktiling_vectorized_autotune.cu
 │       ├── run_2d_blocktiling_transpose_autotune.cu
 │       ├── run_warptiling_autotune.cu
-│       ├── run_pipelining_autotune.cu
 │       ├── run_double_buffering_pipeline_autotune.cu
 │       └── run_ping_pong_pipeline_autotune.cu
 ├── profiler/
