@@ -9,6 +9,7 @@ sm         := "120"
 sm_tensor  := "120"
 src        := "src"
 kernels    := "src/kernels"
+bin        := "bin"
 libs       := "-lcublas -lcuda"
 includes   := "-I./src"
 opt        := "-O3"
@@ -28,39 +29,42 @@ check kernel="naive":
 
 # Build a kernel                     (e.g. just build naive)
 build kernel="naive":
-    nvcc {{opt}} {{includes}} -arch=sm_{{sm}} {{src}}/run_{{kernel}}.cu {{shared}} {{libs}} -o run_{{kernel}}
-    @echo "✓ Built: run_{{kernel}}"
+    mkdir -p {{bin}}
+    nvcc {{opt}} {{includes}} -arch=sm_{{sm}} {{src}}/run_{{kernel}}.cu {{shared}} {{libs}} -o {{bin}}/run_{{kernel}}
+    @echo "✓ Built: {{bin}}/run_{{kernel}}"
 
 # Build + run a kernel               (e.g. just run naive)
 run kernel="naive": (build kernel)
-    ./run_{{kernel}}
+    ./{{bin}}/run_{{kernel}}
 
 # ── Tensor kernels (sm_120 for mma.sync on consumer Blackwell) ───────────────
 
 # Build a tensor kernel              (e.g. just build-tensor kernel_1)
 build-tensor kernel:
-    nvcc {{opt}} {{includes}} -arch=sm_{{sm_tensor}} {{src}}/run_tensor_{{kernel}}.cu {{shared}} {{libs}} -o run_tensor_{{kernel}}
-    @echo "✓ Built: run_tensor_{{kernel}}"
+    mkdir -p {{bin}}
+    nvcc {{opt}} {{includes}} -arch=sm_{{sm_tensor}} {{src}}/run_tensor_{{kernel}}.cu {{shared}} {{libs}} -o {{bin}}/run_tensor_{{kernel}}
+    @echo "✓ Built: {{bin}}/run_tensor_{{kernel}}"
 
 # Build + run a tensor kernel        (e.g. just run-tensor kernel_1)
 run-tensor kernel: (build-tensor kernel)
-    ./run_tensor_{{kernel}}
+    ./{{bin}}/run_tensor_{{kernel}}
 
 # ── Autotune ─────────────────────────────────────────────────────────────────
 
 # Build + autotune a kernel          (e.g. just autotune warptiling)
 autotune kernel:
-    nvcc {{opt}} {{includes}} -arch=sm_{{sm}} {{src}}/autotune/run_{{kernel}}_autotune.cu {{shared}} {{libs}} -o run_{{kernel}}_autotune
-    ./run_{{kernel}}_autotune
+    mkdir -p {{bin}}
+    nvcc {{opt}} {{includes}} -arch=sm_{{sm}} {{src}}/autotune/run_{{kernel}}_autotune.cu {{shared}} {{libs}} -o {{bin}}/run_{{kernel}}_autotune
+    ./{{bin}}/run_{{kernel}}_autotune
 
 # Build + ncu profile                (e.g. just profile naive)
 profile kernel="naive": (build kernel)
-    ncu --set full ./run_{{kernel}} --profile
+    ncu --set full ./{{bin}}/run_{{kernel}} --profile
 
 # Dump SASS assembly                 (e.g. just sass 2d_blocktiling_vectorized)
 sass kernel="naive": (build kernel)
     mkdir -p inspect
-    cuobjdump --dump-sass run_{{kernel}} \
+    cuobjdump --dump-sass {{bin}}/run_{{kernel}} \
         > inspect/run_{{kernel}}.sm{{sm}}.sass
     @echo "✓ SASS written to inspect/run_{{kernel}}.sm{{sm}}.sass"
 
@@ -89,7 +93,7 @@ run-all:
 plot kernel="naive": (build kernel)
     #!/usr/bin/env bash
     stamp=$(date +%Y%m%d_%H%M%S)
-    python3 profiler/ncu_dashboard.py ./run_{{kernel}} \
+    python3 profiler/ncu_dashboard.py ./{{bin}}/run_{{kernel}} \
         --save-csv "profiler/output/{{kernel}}_${stamp}.csv" \
         -o "profiler/output/{{kernel}}_${stamp}.png"
 
@@ -98,7 +102,7 @@ ncu-csv kernel="naive": (build kernel)
     @mkdir -p profiler/output
     ncu --csv --metrics \
         "sm__throughput.avg.pct_of_peak_sustained_elapsed,gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed,l1tex__throughput.avg.pct_of_peak_sustained_elapsed,lts__throughput.avg.pct_of_peak_sustained_elapsed,smsp__sass_thread_inst_executed_op_ffma_pred_on.sum,smsp__sass_thread_inst_executed_op_fadd_pred_on.sum,smsp__sass_thread_inst_executed_op_fmul_pred_on.sum,smsp__sass_thread_inst_executed_op_fp16_pred_on.sum,smsp__sass_thread_inst_executed_op_fp64_pred_on.sum,smsp__sass_thread_inst_executed_op_integer_pred_on.sum,smsp__sass_thread_inst_executed_op_bit_pred_on.sum,smsp__sass_thread_inst_executed_op_memory_pred_on.sum,smsp__sass_thread_inst_executed_op_control_pred_on.sum,smsp__sass_thread_inst_executed_op_conversion_pred_on.sum,smsp__sass_thread_inst_executed_op_misc_pred_on.sum,smsp__sass_thread_inst_executed_op_uniform_pred_on.sum,smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct,smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct,smsp__warp_issue_stalled_mio_throttle_per_warp_active.pct,smsp__warp_issue_stalled_math_pipe_throttle_per_warp_active.pct,smsp__warp_issue_stalled_barrier_per_warp_active.pct,smsp__warp_issue_stalled_not_selected_per_warp_active.pct,smsp__warp_issue_stalled_wait_per_warp_active.pct,smsp__pipe_fma_cycles_active.avg.pct_of_peak_sustained_active,smsp__pipe_alu_cycles_active.avg.pct_of_peak_sustained_active,smsp__pipe_fp64_cycles_active.avg.pct_of_peak_sustained_active,smsp__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_active,l1tex__t_sector_hit_rate.pct,lts__t_sector_hit_rate.pct,l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum,l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum,l1tex__data_pipe_lsu_wavefronts_mem_shared.sum,dram__bytes.sum,dram__bytes_op_read.sum,dram__bytes_op_write.sum,gpu__time_duration.sum,smsp__inst_executed.avg.per_cycle_active,sm__warps_active.avg.pct_of_peak_sustained_active" \
-        ./run_{{kernel}} --profile > profiler/output/{{kernel}}.csv 2>/dev/null
+        ./{{bin}}/run_{{kernel}} --profile > profiler/output/{{kernel}}.csv 2>/dev/null
     @echo "✓ CSV saved: profiler/output/{{kernel}}.csv"
 
 # Plot from existing CSV              (e.g. just plot-csv profiler/output/warptiling.csv)
@@ -107,7 +111,7 @@ plot-csv csv_path:
 
 # SASS assembly analysis report       (e.g. just sass-report warptiling)
 sass-report kernel="naive": (build kernel)
-    python3 profiler/sass_report.py ./run_{{kernel}} \
+    python3 profiler/sass_report.py ./{{bin}}/run_{{kernel}} \
         -o profiler/output/{{kernel}}_sass.png
 
 # PTX IR analysis report              (e.g. just ptx-report warptiling)
@@ -128,4 +132,4 @@ clean:
           run_double_buffering_pipeline run_double_buffering_pipeline_autotune \
           run_ping_pong_pipeline run_ping_pong_pipeline_autotune \
           run_reference_warptiling run_cublas
-    rm -rf inspect profiler/output
+    rm -rf {{bin}} inspect profiler/output
